@@ -98,6 +98,17 @@ export interface BidAttachmentResult {
   keywordFound: boolean;
 }
 
+/**
+ * Whether this notice has a confirmed winning bidder, checked up front before any attachment work begins.
+ */
+export type BidNoticeResultAwardStatus = typeof BidNoticeResultAwardStatus[keyof typeof BidNoticeResultAwardStatus];
+
+
+export const BidNoticeResultAwardStatus = {
+  confirmed: 'confirmed',
+  not_found: 'not_found',
+} as const;
+
 export interface BidNoticeResult {
   noticeNumber: string;
   /** @nullable */
@@ -117,6 +128,10 @@ export interface BidNoticeResult {
   attachments: BidAttachmentResult[];
   /** @nullable */
   error: string | null;
+  /** Whether this notice has a confirmed winning bidder, checked up front before any attachment work begins. */
+  awardStatus?: BidNoticeResultAwardStatus;
+  /** @nullable */
+  bidderName?: string | null;
 }
 
 export type BidSearchResultDownloadStatus = typeof BidSearchResultDownloadStatus[keyof typeof BidSearchResultDownloadStatus];
@@ -145,6 +160,7 @@ export const BidSearchResultResultStatus = {
   no_attachment: 'no_attachment',
   download_failed: 'download_failed',
   parse_failed: 'parse_failed',
+  not_awarded: 'not_awarded',
 } as const;
 
 export type BidSearchResultAwardStatus = typeof BidSearchResultAwardStatus[keyof typeof BidSearchResultAwardStatus];

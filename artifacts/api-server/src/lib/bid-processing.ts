@@ -238,7 +238,13 @@ export interface SearchResult {
   downloadError: string | null;
   parseStatus: "success" | "failed" | "not_applicable";
   parseError: string | null;
-  resultStatus: "keyword_found" | "keyword_not_found" | "no_attachment" | "download_failed" | "parse_failed";
+  resultStatus:
+    | "keyword_found"
+    | "keyword_not_found"
+    | "no_attachment"
+    | "download_failed"
+    | "parse_failed"
+    | "not_awarded";
   retryCount: number;
   keywordFound: boolean;
   foundKeywords: string[];
@@ -297,6 +303,11 @@ export interface NoticeResult {
   estimatedAmount?: string;
   baseAmount?: string;
   constructionOverview?: string;
+  // Set up front (before attachments are even looked at) from the government
+  // award record: notices with no confirmed winner skip attachment download
+  // and keyword search entirely — there is no one to pitch to yet.
+  awardStatus?: "confirmed" | "not_found";
+  bidderName?: string | null;
   error: string | null;
 }
 
@@ -724,9 +735,7 @@ async function fillMissingBusinessContact(job: CollectionJob, result: SearchResu
   }
 }
 
-async function enrichKeywordResults(job: CollectionJob): Promise<void> {
-  const targets = new Set(job.searchResults.filter((result) => result.keywordFound).map((result) => result.noticeNumber));
-  const awards = await fetchAwards(targets);
+async function enrichKeywordResults(job: CollectionJob, awards: Map<string, Record<string, unknown>>): Promise<void> {
   for (const result of job.searchResults.filter((candidate) => candidate.keywordFound)) {
     const notice = job.notices.find((candidate) => candidate.noticeNumber === result.noticeNumber);
     const award = awards.get(result.noticeNumber);
@@ -1151,11 +1160,46 @@ function jobStatePath(jobId: string): string {
   return path.join(jobDirectory(jobId), "job.json");
 }
 
-async function processNotice(job: CollectionJob, notice: NoticeResult): Promise<void> {
+async function processNotice(
+  job: CollectionJob,
+  notice: NoticeResult,
+  award: Record<string, unknown> | null,
+): Promise<void> {
   notice.status = "running";
   job.currentNoticeNumber = notice.noticeNumber;
+  notice.awardStatus = award ? "confirmed" : "not_found";
+  notice.bidderName = award ? String(award.bidwinnrNm ?? "").trim() || null : null;
   updateSummary(job);
   await persistJob(job);
+
+  // No confirmed winner yet: there's no one to pitch to, so skip downloading
+  // and searching this notice's attachments entirely and just record that.
+  if (!award) {
+    notice.status = "completed";
+    job.searchResults.push({
+      noticeNumber: notice.noticeNumber,
+      noticeName: null,
+      attachmentFileName: "-",
+      downloadStatus: "failed",
+      downloadError: "낙찰자가 아직 확정되지 않아 첨부파일 검색을 건너뛰었습니다.",
+      parseStatus: "not_applicable",
+      parseError: null,
+      resultStatus: "not_awarded",
+      retryCount: 0,
+      keywordFound: false,
+      foundKeywords: [],
+      fileName: "-",
+      sheet: null,
+      page: null,
+      location: "-",
+      surroundingText: "",
+      originalText: "",
+      bidderName: "낙찰자 없음",
+      awardStatus: "not_found",
+    });
+    return;
+  }
+
   const noticeDir = path.join(jobDirectory(job.jobId), notice.noticeNumber);
   await mkdir(noticeDir, { recursive: true });
 
@@ -1420,11 +1464,16 @@ async function runJob(job: CollectionJob): Promise<void> {
   job.status = "running";
   job.startedAt = new Date().toISOString();
   try {
+    // Check award status for every requested notice up front, in one batched
+    // pass, before touching any attachments: a notice with no confirmed
+    // winner yet has no one to pitch to, so there's no point downloading and
+    // parsing its documents at all.
+    const awards = await fetchAwards(new Set(job.notices.map((notice) => notice.noticeNumber)));
     let nextIndex = 0;
     const worker = async () => {
       while (nextIndex < job.notices.length) {
         const notice = job.notices[nextIndex++];
-        await processNotice(job, notice);
+        await processNotice(job, notice, awards.get(notice.noticeNumber) ?? null);
         job.completedCount += 1;
         updateSummary(job);
         await persistJob(job);
@@ -1443,7 +1492,7 @@ async function runJob(job: CollectionJob): Promise<void> {
       await persistJob(job);
       return;
     }
-    await enrichKeywordResults(job);
+    await enrichKeywordResults(job, awards);
     job.currentNoticeNumber = null;
     job.status = job.notices.some((notice) => notice.status === "failed" || notice.status === "partial")
       ? "completed_with_errors"
@@ -1717,6 +1766,7 @@ function resultRows(job: CollectionJob): unknown[][] {
         no_attachment: "첨부파일없음",
         download_failed: "다운로드실패",
         parse_failed: "파싱실패",
+        not_awarded: "낙찰자없음",
       }[item.resultStatus],
       item.keywordFound ? "발견" : "없음",
       item.foundKeywords,
@@ -1749,9 +1799,14 @@ function resultRows(job: CollectionJob): unknown[][] {
         no_attachment: "NO_ATTACHMENT",
         download_failed: "DOWNLOAD_FAIL",
         parse_failed: "PARSE_FAIL",
+        not_awarded: "NOT_AWARDED",
       }[item.resultStatus],
-      notice?.resolvedOrder ? "SUCCESS" : "LOOKUP_FAIL",
-      item.keywordFound ? (item.awardStatus === "confirmed" ? "SUCCESS" : "NOT_FOUND") : "NOT_APPLICABLE",
+      item.resultStatus === "not_awarded" ? "SKIPPED_NOT_AWARDED" : notice?.resolvedOrder ? "SUCCESS" : "LOOKUP_FAIL",
+      item.resultStatus === "not_awarded"
+        ? "NOT_AWARDED"
+        : item.keywordFound
+          ? (item.awardStatus === "confirmed" ? "SUCCESS" : "NOT_FOUND")
+          : "NOT_APPLICABLE",
       item.keywordFound
         ? !item.bidderPhone && !item.bidderAddress
           ? "NOT_APPLICABLE"

@@ -17,6 +17,7 @@ export * from './bidCollectionSummary';
 export * from './bidImportInput';
 export * from './bidImportResult';
 export * from './bidNoticeResult';
+export * from './bidNoticeResultAwardStatus';
 export * from './bidNoticeResultStatus';
 export * from './bidSearchResult';
 export * from './bidSearchResultAwardStatus';

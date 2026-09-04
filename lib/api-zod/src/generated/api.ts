@@ -118,7 +118,9 @@ export const GetBidCollectionStatusResponse = zod.object({
   "parseFailureCount": zod.number(),
   "keywordFound": zod.boolean()
 })),
-  "error": zod.string().nullable()
+  "error": zod.string().nullable(),
+  "awardStatus": zod.enum(['confirmed', 'not_found']).optional().describe('Whether this notice has a confirmed winning bidder, checked up front before any attachment work begins.'),
+  "bidderName": zod.string().nullish()
 })),
   "searchResults": zod.array(zod.object({
   "noticeNumber": zod.string(),
@@ -128,7 +130,7 @@ export const GetBidCollectionStatusResponse = zod.object({
   "downloadError": zod.string().nullable(),
   "parseStatus": zod.enum(['success', 'failed', 'not_applicable']),
   "parseError": zod.string().nullable(),
-  "resultStatus": zod.enum(['keyword_found', 'keyword_not_found', 'no_attachment', 'download_failed', 'parse_failed']),
+  "resultStatus": zod.enum(['keyword_found', 'keyword_not_found', 'no_attachment', 'download_failed', 'parse_failed', 'not_awarded']),
   "retryCount": zod.number(),
   "keywordFound": zod.boolean(),
   "foundKeywords": zod.array(zod.string()),

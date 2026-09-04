@@ -312,6 +312,8 @@ export default function Home() {
         return <Badge variant="warning">파싱 실패</Badge>;
       case 'no_attachment':
         return <Badge variant="outline">첨부파일 없음</Badge>;
+      case 'not_awarded':
+        return <Badge variant="outline">낙찰자 없음</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -334,7 +336,9 @@ export default function Home() {
       keywordHitCount: 0,
       parseFailureCount: 0,
       attachments: [],
-      error: null
+      error: null,
+      awardStatus: undefined,
+      bidderName: undefined
     };
   });
 
@@ -756,6 +760,7 @@ export default function Home() {
                     <TableHead className="w-[140px]">공고번호</TableHead>
                     <TableHead>공고명</TableHead>
                     <TableHead className="w-[80px] text-center">상태</TableHead>
+                    <TableHead className="w-[110px] text-center">낙찰</TableHead>
                     <TableHead className="w-[80px] text-center">차수</TableHead>
                     <TableHead className="w-[80px] text-center">문서수</TableHead>
                     <TableHead className="w-[70px] text-center">파싱실패</TableHead>
@@ -802,6 +807,22 @@ export default function Home() {
                       </TableCell>
                       <TableCell className="text-center">
                         {getNoticeStatusBadge(notice.status)}
+                      </TableCell>
+                      <TableCell className="text-center text-xs">
+                        {notice.awardStatus === 'confirmed' ? (
+                          <div>
+                            <Badge variant="success" className="mb-0.5">낙찰</Badge>
+                            {notice.bidderName && (
+                              <div className="text-muted-foreground truncate max-w-[100px]" title={notice.bidderName}>
+                                {notice.bidderName}
+                              </div>
+                            )}
+                          </div>
+                        ) : notice.awardStatus === 'not_found' ? (
+                          <Badge variant="outline" className="text-muted-foreground">낙찰자 없음</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">확인중...</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-center text-xs">
                         <div>{notice.requestedOrder} → {notice.resolvedOrder ?? '-'}</div>
@@ -856,6 +877,7 @@ export default function Home() {
                   <option value="no_attachment">NO_ATTACHMENT</option>
                   <option value="download_failed">DOWNLOAD_FAIL</option>
                   <option value="parse_failed">PARSE_FAIL</option>
+                  <option value="not_awarded">NOT_AWARDED</option>
                 </select>
                 {hasResults && (
                   <Badge variant="secondary" className="font-medium bg-primary/10 text-primary hover:bg-primary/20">

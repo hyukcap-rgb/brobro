@@ -322,6 +322,12 @@ components:
             $ref: "#/components/schemas/BidAttachmentResult"
         error:
           type: ["string", "null"]
+        awardStatus:
+          type: string
+          description: Whether this notice has a confirmed winning bidder, checked up front before any attachment work begins.
+          enum: [confirmed, not_found]
+        bidderName:
+          type: ["string", "null"]
       required:
         - noticeNumber
         - noticeName
@@ -390,7 +396,7 @@ components:
           type: ["string", "null"]
         resultStatus:
           type: string
-          enum: [keyword_found, keyword_not_found, no_attachment, download_failed, parse_failed]
+          enum: [keyword_found, keyword_not_found, no_attachment, download_failed, parse_failed, not_awarded]
         retryCount:
           type: number
         keywordFound:
