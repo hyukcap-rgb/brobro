@@ -12,4 +12,5 @@ RUN corepack enable
 RUN pnpm install --frozen-lockfile
 RUN pnpm run build:railway
 ENV NODE_ENV=production
+EXPOSE 8080
 CMD ["node", "artifacts/api-server/dist/index.mjs"]
