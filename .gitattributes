@@ -1,0 +1,5 @@
+downloads/bid-attachments-part-1.zip filter=lfs diff=lfs merge=lfs -text
+downloads/나라장터_22개공고_첨부파일.zip filter=lfs diff=lfs merge=lfs -text
+downloads/나라장터_첨부파일_1_R26BK01682856-002.zip filter=lfs diff=lfs merge=lfs -text
+downloads/bid-attachments-all-final.zip filter=lfs diff=lfs merge=lfs -text
+downloads/generic-bid-search-regression-22-attachments.zip filter=lfs diff=lfs merge=lfs -text
