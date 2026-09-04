@@ -17,6 +17,7 @@ Set these in the target environment; values are intentionally not included in th
 - `DATABASE_URL`
 - `SESSION_SECRET`
 - `DATA_GO_KR_SERVICE_KEY`
+- `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` (optional) — Naver 지역검색 Open API, free tier. Used as a last-resort fallback to fill in the winning bidder's business address/phone when neither the government award record nor the notice's own attachments have it. Without these two set, that portal-search fallback is silently skipped (attachment-text extraction still runs).
 - Object Storage variables used by the project, if persistent attachment storage is enabled.
 
 Never commit or paste secret values into source files.

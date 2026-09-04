@@ -264,6 +264,7 @@ export interface SearchResult {
   baseAmount?: string;
   constructionOverview?: string;
   awardStatus?: "confirmed" | "not_found";
+  contactSource?: "government" | "attachment" | "portal";
 }
 
 export interface AttachmentResult {
@@ -591,6 +592,138 @@ function extractItemFields(text: string, keywords: readonly string[] = DEFAULT_K
   };
 }
 
+const BUSINESS_PHONE_PATTERN =
+  /(?:전화(?:번호)?|TEL|Tel|연락처|대표\s*번호|대표\s*전화)\s*[:：|]?\s*(0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4})/;
+const BUSINESS_PHONE_FALLBACK_PATTERN = /0\d{1,2}[-.\s]\d{3,4}[-.\s]\d{4}/;
+// Attachment text is often flattened from spreadsheet cells with "|" as the
+// cell separator (see extractItemFields below), so the value can follow the
+// label with a colon, a pipe, or nothing at all.
+const BUSINESS_ADDRESS_PATTERN =
+  /(?:사업장\s*소재지|본점\s*소재지|본사\s*소재지|소재지|주소)\s*[:：|]?\s*([^\n\r|]{5,80})/;
+
+// Looks for the winning bidder's company name inside already-parsed document
+// text and, if found, pulls an address/phone mentioned nearby. Free — no
+// network call — so this is always tried before the paid/rate-limited portal
+// search below.
+function extractBusinessContactFromText(
+  text: string,
+  companyName: string,
+): { address?: string; phone?: string } {
+  const trimmedName = companyName.trim();
+  if (!trimmedName || trimmedName === "미공개/확인불가") return {};
+  const index = text.indexOf(trimmedName);
+  if (index < 0) return {};
+  const windowText = text.slice(Math.max(0, index - 200), index + trimmedName.length + 400);
+  const phone =
+    windowText.match(BUSINESS_PHONE_PATTERN)?.[1] ?? windowText.match(BUSINESS_PHONE_FALLBACK_PATTERN)?.[0];
+  const address = windowText.match(BUSINESS_ADDRESS_PATTERN)?.[1]?.trim();
+  const found: { address?: string; phone?: string } = {};
+  if (address) found.address = address;
+  if (phone) found.phone = phone;
+  return found;
+}
+
+// Re-reads the notice's already-downloaded attachment files (kept on disk for
+// the ZIP download) looking for the winning bidder's company name.
+async function findBusinessContactInAttachments(
+  job: CollectionJob,
+  noticeNumber: string,
+  companyName: string,
+): Promise<{ address?: string; phone?: string }> {
+  const noticeDir = path.join(jobDirectory(job.jobId), noticeNumber);
+  const files = new Set(
+    job.searchResults
+      .filter((result) => result.noticeNumber === noticeNumber && result.fileName && result.fileName !== "-")
+      .map((result) => path.join(noticeDir, result.fileName)),
+  );
+  for (const filePath of files) {
+    try {
+      const segments = await extractSegments(filePath);
+      const text = segments.map((segment) => segment.itemContext ?? segment.text).join("\n");
+      const found = extractBusinessContactFromText(text, companyName);
+      if (found.address || found.phone) return found;
+    } catch {
+      // Best-effort: skip files that can no longer be parsed here.
+    }
+  }
+  return {};
+}
+
+// Naver's 지역검색(Local Search) open API: given a business name, returns its
+// road address and listed phone number. Free tier (NAVER_CLIENT_ID /
+// NAVER_CLIENT_SECRET, see replit.md) — used only as a last resort when
+// neither the government award record nor the notice's attachments have
+// contact details for the winning bidder.
+async function searchBusinessContactOnPortal(
+  companyName: string,
+): Promise<{ address?: string; phone?: string } | null> {
+  const clientId = process.env.NAVER_CLIENT_ID;
+  const clientSecret = process.env.NAVER_CLIENT_SECRET;
+  const trimmedName = companyName.trim();
+  if (!clientId || !clientSecret || !trimmedName || trimmedName === "미공개/확인불가") return null;
+  try {
+    const url = `https://openapi.naver.com/v1/search/local.json?query=${encodeURIComponent(trimmedName)}&display=1`;
+    const response = await fetch(url, {
+      headers: {
+        "X-Naver-Client-Id": clientId,
+        "X-Naver-Client-Secret": clientSecret,
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as {
+      items?: { address?: string; roadAddress?: string; telephone?: string }[];
+    };
+    const item = payload.items?.[0];
+    if (!item) return null;
+    const address = (item.roadAddress || item.address || "").trim();
+    const phone = (item.telephone || "").trim();
+    if (!address && !phone) return null;
+    const found: { address?: string; phone?: string } = {};
+    if (address) found.address = address;
+    if (phone) found.phone = phone;
+    return found;
+  } catch (error) {
+    logger.warn({ err: error, companyName: trimmedName }, "Naver local search failed");
+    return null;
+  }
+}
+
+// Fills in bidderAddress/bidderPhone when the government award record left
+// them blank: the notice's own attachments are tried first (free), then the
+// portal search (rate-limited, needs credentials).
+async function fillMissingBusinessContact(job: CollectionJob, result: SearchResult): Promise<void> {
+  if (!result.bidderName || result.bidderName === "미공개/확인불가") return;
+  const needsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
+  const needsPhone = !result.bidderPhone || result.bidderPhone === "미공개/확인불가";
+  if (!needsAddress && !needsPhone) return;
+
+  const fromAttachment = await findBusinessContactInAttachments(job, result.noticeNumber, result.bidderName);
+  if (needsAddress && fromAttachment.address) {
+    result.bidderAddress = fromAttachment.address;
+    result.contactSource ??= "attachment";
+  }
+  if (needsPhone && fromAttachment.phone) {
+    result.bidderPhone = fromAttachment.phone;
+    result.contactSource ??= "attachment";
+  }
+
+  const stillNeedsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
+  const stillNeedsPhone = !result.bidderPhone || result.bidderPhone === "미공개/확인불가";
+  if (!stillNeedsAddress && !stillNeedsPhone) return;
+
+  const fromPortal = await searchBusinessContactOnPortal(result.bidderName);
+  if (!fromPortal) return;
+  if (stillNeedsAddress && fromPortal.address) {
+    result.bidderAddress = fromPortal.address;
+    result.contactSource ??= "portal";
+  }
+  if (stillNeedsPhone && fromPortal.phone) {
+    result.bidderPhone = fromPortal.phone;
+    result.contactSource ??= "portal";
+  }
+}
+
 async function enrichKeywordResults(job: CollectionJob): Promise<void> {
   const targets = new Set(job.searchResults.filter((result) => result.keywordFound).map((result) => result.noticeNumber));
   const awards = await fetchAwards(targets);
@@ -611,6 +744,15 @@ async function enrichKeywordResults(job: CollectionJob): Promise<void> {
     result.baseAmount = notice?.baseAmount ?? "미공개/확인불가";
     result.constructionOverview = notice?.constructionOverview ?? "미공개/확인불가";
     result.awardStatus = award ? "confirmed" : "not_found";
+    result.contactSource = award?.bidwinnrAdrs || award?.bidwinnrTelNo ? "government" : undefined;
+    try {
+      await fillMissingBusinessContact(job, result);
+    } catch (error) {
+      logger.warn(
+        { err: error, noticeNumber: result.noticeNumber, bidderName: result.bidderName },
+        "Could not fill missing business contact info",
+      );
+    }
   }
 }
 
@@ -1611,9 +1753,15 @@ function resultRows(job: CollectionJob): unknown[][] {
       notice?.resolvedOrder ? "SUCCESS" : "LOOKUP_FAIL",
       item.keywordFound ? (item.awardStatus === "confirmed" ? "SUCCESS" : "NOT_FOUND") : "NOT_APPLICABLE",
       item.keywordFound
-        ? item.bidderPhone && item.bidderPhone !== "미공개/확인불가"
-          ? "PUBLIC_BUSINESS_CONTACT_FOUND"
-          : "CONTACT_NOT_FOUND"
+        ? !item.bidderPhone && !item.bidderAddress
+          ? "NOT_APPLICABLE"
+          : item.bidderPhone !== "미공개/확인불가" || item.bidderAddress !== "미공개/확인불가"
+            ? {
+                government: "GOV_API_FOUND",
+                attachment: "ATTACHMENT_FOUND",
+                portal: "PORTAL_SEARCH_FOUND",
+              }[item.contactSource ?? "government"]
+            : "CONTACT_NOT_FOUND"
         : "NOT_APPLICABLE",
     ];
   });

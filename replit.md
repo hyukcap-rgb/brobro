@@ -10,6 +10,8 @@ _Replace the heading above with the project's name, and this line with one sente
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
+- Required env: `DATA_GO_KR_SERVICE_KEY` — 나라장터 공공데이터포털 서비스키
+- Optional env: `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` — Naver 지역검색 Open API (free), last-resort fallback for filling in a winning bidder's address/phone when the government award record and the notice's own attachments don't have it
 
 ## Stack
 
@@ -39,6 +41,8 @@ _Populate as you build — explicit user instructions worth remembering across s
 ## Gotchas
 
 _Populate as you build — sharp edges, "always run X before Y" rules._
+
+- Winning-bidder contact info (`bidderAddress`/`bidderPhone` on `BidSearchResult`) is filled in through a fallback chain in `enrichKeywordResults` (bid-processing.ts): government award record → the notice's own downloaded attachments (free, regex-based) → Naver 지역검색 portal search (needs `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`, otherwise silently skipped). `contactSource` on the result records which stage actually filled it in.
 
 ## Pointers
 

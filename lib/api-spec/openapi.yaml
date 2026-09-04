@@ -444,6 +444,10 @@ components:
         awardStatus:
           type: string
           enum: [confirmed, not_found]
+        contactSource:
+          type: string
+          description: Where bidderAddress/bidderPhone ultimately came from, when found beyond the base award record.
+          enum: [government, attachment, portal]
       required:
         - noticeNumber
         - noticeName

@@ -949,7 +949,13 @@ export default function Home() {
                             <span className="text-muted-foreground">공사개요</span><span>{res.constructionOverview ?? '미공개/확인불가'}</span>
                             <span className="text-muted-foreground">주소</span><span>{res.bidderAddress ?? '미공개/확인불가'}</span>
                             <span className="text-muted-foreground">연락처</span><span>{res.bidderPhone ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">출처</span><span>첨부파일 / 입찰공고 / 낙찰정보</span>
+                            <span className="text-muted-foreground">연락처 출처</span>
+                            <span>
+                              {res.contactSource === 'government' && '나라장터 낙찰정보'}
+                              {res.contactSource === 'attachment' && '첨부파일에서 추출'}
+                              {res.contactSource === 'portal' && '포털 검색 보완'}
+                              {!res.contactSource && (res.bidderPhone && res.bidderPhone !== '미공개/확인불가' ? '확인됨' : '미확인')}
+                            </span>
                           </div>
                           {jobId && res.downloadStatus === 'success' && res.fileName && res.fileName !== '-' && (
                             <a
