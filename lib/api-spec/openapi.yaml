@@ -1,0 +1,499 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: bids
+    description: 나라장터 공사 입찰공고 및 첨부문서 수집
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /bids/collect:
+    post:
+      operationId: startBidCollection
+      tags: [bids]
+      summary: Start a bid attachment collection job
+      description: Looks up the requested bid notices, downloads their attachments, and searches supported documents for configured keywords.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BidCollectionInput"
+      responses:
+        "202":
+          description: Collection job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidCollectionJob"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /bids/import:
+    post:
+      operationId: importBidNoticeFile
+      tags: [bids]
+      summary: Extract and validate bid notice numbers from XLS, XLSX, or CSV
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BidImportInput"
+      responses:
+        "200":
+          description: Parsed notice numbers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidImportResult"
+  /bids/jobs/{jobId}/retry:
+    post:
+      operationId: retryFailedBidNotices
+      tags: [bids]
+      summary: Retry only failed or partially completed notices
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "202":
+          description: Retry job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidCollectionJob"
+  /bids/jobs/{jobId}:
+    get:
+      operationId: getBidCollectionStatus
+      tags: [bids]
+      summary: Get collection progress and search results
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Collection progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidCollectionStatus"
+        "404":
+          description: Collection job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /bids/jobs/{jobId}/archive:
+    get:
+      operationId: downloadBidArchive
+      tags: [bids]
+      summary: Download every attachment in a single ZIP archive
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: ZIP archive grouped into notice-number folders
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Collection job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /bids/jobs/{jobId}/results.csv:
+    get:
+      operationId: downloadBidResultsCsv
+      tags: [bids]
+      summary: Download keyword search results as CSV
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Search results CSV
+          content:
+            text/csv:
+              schema:
+                type: string
+        "404":
+          description: Collection job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /bids/jobs/{jobId}/results.xlsx:
+    get:
+      operationId: downloadBidResultsXlsx
+      tags: [bids]
+      summary: Download keyword search results as XLSX
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Search results workbook
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Collection job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    BidCollectionInput:
+      type: object
+      properties:
+        noticeNumbers:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items:
+            type: string
+            pattern: "^R[0-9A-Z]{12}-[0-9]{3}$"
+        keywords:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 100
+      required:
+        - noticeNumbers
+        - keywords
+    BidImportInput:
+      type: object
+      properties:
+        fileName:
+          type: string
+        contentBase64:
+          type: string
+      required: [fileName, contentBase64]
+    BidImportResult:
+      type: object
+      properties:
+        noticeNumbers:
+          type: array
+          items:
+            type: string
+        duplicateCount:
+          type: number
+        invalidValues:
+          type: array
+          items:
+            type: string
+      required: [noticeNumbers, duplicateCount, invalidValues]
+    BidCollectionJob:
+      type: object
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, completed_with_errors, failed]
+        totalCount:
+          type: number
+        completedCount:
+          type: number
+      required: [jobId, status, totalCount, completedCount]
+    BidCollectionStatus:
+      type: object
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, completed_with_errors, failed]
+        totalCount:
+          type: number
+        completedCount:
+          type: number
+        startedAt:
+          type: ["string", "null"]
+        updatedAt:
+          type: ["string", "null"]
+        currentNoticeNumber:
+          type: ["string", "null"]
+        notices:
+          type: array
+          items:
+            $ref: "#/components/schemas/BidNoticeResult"
+        searchResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/BidSearchResult"
+        keywords:
+          type: array
+          items:
+            type: string
+        reusedFromJobId:
+          type: ["string", "null"]
+        summary:
+          $ref: "#/components/schemas/BidCollectionSummary"
+        error:
+          type: ["string", "null"]
+      required:
+        - jobId
+        - status
+        - totalCount
+        - completedCount
+        - startedAt
+        - updatedAt
+        - currentNoticeNumber
+        - notices
+        - searchResults
+        - keywords
+        - reusedFromJobId
+        - summary
+        - error
+    BidNoticeResult:
+      type: object
+      properties:
+        noticeNumber:
+          type: string
+        noticeName:
+          type: ["string", "null"]
+        requestedOrder:
+          type: string
+        resolvedOrder:
+          type: ["string", "null"]
+        orderMatched:
+          type: ["boolean", "null"]
+        lookupAttempts:
+          type: number
+        status:
+          type: string
+          enum: [queued, running, completed, partial, failed]
+        attachmentCount:
+          type: number
+        downloadedCount:
+          type: number
+        failedCount:
+          type: number
+        keywordHitCount:
+          type: number
+        parseFailureCount:
+          type: number
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/BidAttachmentResult"
+        error:
+          type: ["string", "null"]
+      required:
+        - noticeNumber
+        - noticeName
+        - requestedOrder
+        - resolvedOrder
+        - orderMatched
+        - lookupAttempts
+        - status
+        - attachmentCount
+        - downloadedCount
+        - failedCount
+        - keywordHitCount
+        - parseFailureCount
+        - attachments
+        - error
+    BidAttachmentResult:
+      type: object
+      properties:
+        fileName:
+          type: string
+        url:
+          type: string
+        priority:
+          type: boolean
+        downloadStatus:
+          type: string
+          enum: [pending, success, failed]
+        downloadError:
+          type: ["string", "null"]
+        attempts:
+          type: number
+        parsedFileCount:
+          type: number
+        parseFailureCount:
+          type: number
+        keywordFound:
+          type: boolean
+      required:
+        - fileName
+        - url
+        - priority
+        - downloadStatus
+        - downloadError
+        - attempts
+        - parsedFileCount
+        - parseFailureCount
+        - keywordFound
+    BidSearchResult:
+      type: object
+      properties:
+        noticeNumber:
+          type: string
+        noticeName:
+          type: ["string", "null"]
+        attachmentFileName:
+          type: string
+        downloadStatus:
+          type: string
+          enum: [success, failed]
+        downloadError:
+          type: ["string", "null"]
+        parseStatus:
+          type: string
+          enum: [success, failed, not_applicable]
+        parseError:
+          type: ["string", "null"]
+        resultStatus:
+          type: string
+          enum: [keyword_found, keyword_not_found, no_attachment, download_failed, parse_failed]
+        retryCount:
+          type: number
+        keywordFound:
+          type: boolean
+        foundKeywords:
+          type: array
+          items:
+            type: string
+        fileName:
+          type: string
+        sheet:
+          type: ["string", "null"]
+        page:
+          type: ["number", "null"]
+        location:
+          type: string
+        surroundingText:
+          type: string
+        originalText:
+          type: string
+        itemSpecification:
+          type: string
+        itemName:
+          type: string
+        itemQuantity:
+          type: string
+        itemUnit:
+          type: string
+        itemAmount:
+          type: string
+        bidderName:
+          type: string
+        awardIdentifier:
+          type: string
+        awardDate:
+          type: string
+        awardAmount:
+          type: string
+        bidderAddress:
+          type: string
+        bidderPhone:
+          type: string
+        budgetAmount:
+          type: string
+        estimatedAmount:
+          type: string
+        baseAmount:
+          type: string
+        constructionOverview:
+          type: string
+        awardStatus:
+          type: string
+          enum: [confirmed, not_found]
+      required:
+        - noticeNumber
+        - noticeName
+        - attachmentFileName
+        - downloadStatus
+        - downloadError
+        - parseStatus
+        - parseError
+        - resultStatus
+        - retryCount
+        - keywordFound
+        - foundKeywords
+        - fileName
+        - sheet
+        - page
+        - location
+        - surroundingText
+        - originalText
+    BidCollectionSummary:
+      type: object
+      properties:
+        notices:
+          type: number
+        attachments:
+          type: number
+        downloaded:
+          type: number
+        downloadFailures:
+          type: number
+        parseFailures:
+          type: number
+        lookupFailures:
+          type: number
+        filesWithKeywords:
+          type: number
+        keywordMatches:
+          type: number
+      required:
+        - notices
+        - attachments
+        - downloaded
+        - downloadFailures
+        - parseFailures
+        - lookupFailures
+        - filesWithKeywords
+        - keywordMatches
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+

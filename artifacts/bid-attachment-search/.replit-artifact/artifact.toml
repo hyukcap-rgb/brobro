@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "나라장터 공고 첨부문서 검색"
+description = "나라장터 공사 입찰공고의 첨부파일을 수집하고 문서 안의 부직포 관련 키워드를 검색하는 웹 앱입니다."
+version = "1.0.0"
+id = "artifacts/bid-attachment-search"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18544
+
+[services.development]
+run = "pnpm --filter @workspace/bid-attachment-search run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/bid-attachment-search", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/bid-attachment-search/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18544"
+BASE_PATH = "/"
