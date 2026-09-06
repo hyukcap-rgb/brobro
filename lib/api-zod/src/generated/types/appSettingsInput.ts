@@ -5,11 +5,24 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AppSettingsInputWorkCategoriesItem } from './appSettingsInputWorkCategoriesItem';
 
 export interface AppSettingsInput {
   /** @minItems 1 */
   matchKeywords?: string[];
   workTypeKeywords?: string[];
+  /** @minItems 1 */
+  workCategories?: AppSettingsInputWorkCategoriesItem[];
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  minEstimatedPrice?: number | null;
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  maxEstimatedPrice?: number | null;
   /** @minimum 0 */
   minBudgetAmount?: number;
 }

@@ -29,6 +29,13 @@ function formatAmount(value: number | null | undefined): string {
   return `${value.toLocaleString("ko-KR")}원`;
 }
 
+function contactSourceLabel(source: string | null | undefined): string | null {
+  if (source === "government") return "정부 낙찰기록";
+  if (source === "attachment") return "첨부파일에서 추출";
+  if (source === "portal") return "포털 검색 보완";
+  return null;
+}
+
 function scanStatusBadge(status: string) {
   if (status === "completed") {
     return (
@@ -150,7 +157,7 @@ export default function Matches() {
                     <TableHead>낙찰자 연락처</TableHead>
                     <TableHead>현장사무소</TableHead>
                     <TableHead>부직포 수량</TableHead>
-                    <TableHead>예산 / 낙찰금액</TableHead>
+                    <TableHead>추정가격 / 예산 / 낙찰금액</TableHead>
                     <TableHead>낙찰일</TableHead>
                     <TableHead>첨부파일</TableHead>
                   </TableRow>
@@ -163,16 +170,25 @@ export default function Matches() {
                         <div className="font-medium">{match.siteName ?? match.noticeName ?? "-"}</div>
                         <div className="text-xs text-muted-foreground">{match.demandAgency ?? "-"}</div>
                       </TableCell>
-                      <TableCell>{match.workTypeName ?? "-"}</TableCell>
+                      <TableCell className="text-xs">
+                        <div>{match.workCategory ?? "-"}</div>
+                        {match.workTypeName ? <div className="text-muted-foreground">{match.workTypeName}</div> : null}
+                      </TableCell>
                       <TableCell>{match.bidderName ?? "-"}</TableCell>
                       <TableCell className="text-xs">
                         <div>{match.bidderPhone ?? "-"}</div>
                         <div className="text-muted-foreground">{match.bidderAddress ?? "-"}</div>
+                        {contactSourceLabel(match.contactSource) ? (
+                          <Badge variant="outline" className="mt-1 text-[10px] font-normal">
+                            {contactSourceLabel(match.contactSource)}
+                          </Badge>
+                        ) : null}
                       </TableCell>
                       <TableCell className="max-w-[180px] text-xs">{match.siteOffice ?? "미확인"}</TableCell>
                       <TableCell>{match.quantityText ?? "-"}</TableCell>
                       <TableCell className="text-xs whitespace-nowrap">
-                        <div>예산 {formatAmount(match.budgetAmount)}</div>
+                        <div>추정 {formatAmount(match.estimatedAmount)}</div>
+                        <div className="text-muted-foreground">예산 {formatAmount(match.budgetAmount)}</div>
                         <div className="text-muted-foreground">낙찰 {formatAmount(match.awardAmount)}</div>
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-xs">{match.awardDate ?? "-"}</TableCell>

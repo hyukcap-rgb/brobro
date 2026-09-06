@@ -742,11 +742,28 @@ components:
           type: array
           items:
             type: string
+        workCategories:
+          type: array
+          description: >-
+            업무구분(물품/일반용역/기술용역/공사). 나라장터 API가 실제로 지원하는 값만
+            받는다 — 기타/민간은 별도 데이터 연동이 필요해 아직 지원하지 않는다.
+          items:
+            type: string
+            enum: [물품, 일반용역, 기술용역, 공사]
+        minEstimatedPrice:
+          type: ["number", "null"]
+        maxEstimatedPrice:
+          type: ["number", "null"]
         minBudgetAmount:
           type: number
         updatedAt:
           type: string
-      required: [matchKeywords, workTypeKeywords, minBudgetAmount, updatedAt]
+      required:
+        - matchKeywords
+        - workTypeKeywords
+        - workCategories
+        - minBudgetAmount
+        - updatedAt
     AppSettingsInput:
       type: object
       properties:
@@ -759,6 +776,18 @@ components:
           type: array
           items:
             type: string
+        workCategories:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [물품, 일반용역, 기술용역, 공사]
+        minEstimatedPrice:
+          type: ["number", "null"]
+          minimum: 0
+        maxEstimatedPrice:
+          type: ["number", "null"]
+          minimum: 0
         minBudgetAmount:
           type: number
           minimum: 0
@@ -779,6 +808,9 @@ components:
           type: ["string", "null"]
         workTypeName:
           type: ["string", "null"]
+        workCategory:
+          type: ["string", "null"]
+          description: 이 공고를 찾아낸 업무구분(물품/용역/공사).
         demandAgency:
           type: ["string", "null"]
         bidderName:
@@ -789,7 +821,12 @@ components:
           type: ["string", "null"]
         bidderPhone:
           type: ["string", "null"]
+        contactSource:
+          type: ["string", "null"]
+          description: 낙찰자 연락처/주소의 출처 (government/attachment/portal).
         budgetAmount:
+          type: ["number", "null"]
+        estimatedAmount:
           type: ["number", "null"]
         awardAmount:
           type: ["number", "null"]

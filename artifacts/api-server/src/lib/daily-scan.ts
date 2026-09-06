@@ -17,14 +17,59 @@ import {
   withRetry,
   describeError,
   extractItemFields,
+  extractBusinessContactFromText,
+  searchBusinessContactOnPortal,
 } from "./bid-processing";
 import { getAppSettings } from "./settings";
 import { kstToday, shiftKstDate, isKoreanHoliday, type KstDate } from "./kr-holidays";
 import { SCAN_ROOT } from "./scan-storage";
 import { logger } from "./logger";
 
-const AWARD_LIST_URL = "https://apis.data.go.kr/1230000/as/ScsbidInfoService/getScsbidListSttusCnstwk";
-const NOTICE_DETAIL_URL = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoCnstwk";
+// 업무구분(사업 종류)별 나라장터 OpenAPI 엔드포인트. 조달청이 물품(Thng)/
+// 용역(Servc)/공사(Cnstwk)를 각각 별도 오퍼레이션으로 제공하기 때문에, 사용자가
+// 설정에서 고른 업무구분마다 이 매핑으로 정확한 URL을 찾아 따로 조회한다.
+// "일반용역"과 "기술용역"은 나라장터 API 상 하나의 용역(Servc) 오퍼레이션으로만
+// 제공되고 서로 구분되는 필드가 확인되지 않아, 둘 중 하나라도 선택되면 용역
+// 오퍼레이션을 한 번만 호출한다 (SOURCE_BY_CATEGORY로 매핑).
+//
+// "기타"와 "민간"은 나라장터가 아니라 완전히 별도의 누리장터
+// (조달청_누리장터 민간입찰공고서비스/민간낙찰정보서비스) API 등록이 필요해서
+// 아직 연동하지 않았다 — settings.ts의 SUPPORTED_WORK_CATEGORIES 참고.
+type WorkSource = "물품" | "용역" | "공사";
+
+const WORK_SOURCE_ENDPOINTS: Record<WorkSource, { awardUrl: string; detailUrl: string }> = {
+  공사: {
+    awardUrl: "https://apis.data.go.kr/1230000/as/ScsbidInfoService/getScsbidListSttusCnstwk",
+    detailUrl: "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoCnstwk",
+  },
+  물품: {
+    awardUrl: "https://apis.data.go.kr/1230000/as/ScsbidInfoService/getScsbidListSttusThng",
+    detailUrl: "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoThng",
+  },
+  용역: {
+    awardUrl: "https://apis.data.go.kr/1230000/as/ScsbidInfoService/getScsbidListSttusServc",
+    detailUrl: "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoServc",
+  },
+};
+
+const CATEGORY_TO_SOURCE: Record<string, WorkSource> = {
+  물품: "물품",
+  일반용역: "용역",
+  기술용역: "용역",
+  공사: "공사",
+};
+
+function resolveWorkSources(workCategories: string[]): WorkSource[] {
+  const sources = new Set<WorkSource>();
+  for (const category of workCategories) {
+    const source = CATEGORY_TO_SOURCE[category];
+    if (source) sources.add(source);
+  }
+  // 설정이 비어있거나(예: 마이그레이션 직후) 전부 미지원 값이면, 과거 기본
+  // 동작(공사만 검색)으로 안전하게 되돌아간다.
+  if (sources.size === 0) sources.add("공사");
+  return [...sources];
+}
 
 // 요구사항 1, 2: 기본은 "전일" 낙찰 공고만 검색하고, 오늘이 월요일이거나 공휴일이면
 // 전일 + 전전일 둘 다 검색한다 (주말/공휴일에는 낙찰 공고가 거의 올라오지 않기 때문).
@@ -38,7 +83,7 @@ export function computeTargetDates(instant: Date = new Date()): KstDate[] {
   return [yesterday];
 }
 
-async function fetchAwardsForDate(date: KstDate): Promise<Record<string, unknown>[]> {
+async function fetchAwardsForDate(date: KstDate, source: WorkSource): Promise<Record<string, unknown>[]> {
   const key = process.env.DATA_GO_KR_SERVICE_KEY;
   if (!key) throw new Error("DATA_GO_KR_SERVICE_KEY가 설정되지 않았습니다.");
   const items: Record<string, unknown>[] = [];
@@ -54,9 +99,9 @@ async function fetchAwardsForDate(date: KstDate): Promise<Record<string, unknown
       `inqryEndDt=${date.compact}2359`,
       "type=json",
     ].join("&");
-    const response = await requestBuffer(`${AWARD_LIST_URL}?${query}`);
+    const response = await requestBuffer(`${WORK_SOURCE_ENDPOINTS[source].awardUrl}?${query}`);
     if (response.status < 200 || response.status >= 300) {
-      throw new Error(`낙찰 목록 조회 실패 (HTTP ${response.status}, ${date.key})`);
+      throw new Error(`낙찰 목록 조회 실패 (HTTP ${response.status}, ${source}, ${date.key})`);
     }
     const payload = JSON.parse(response.body.toString("utf8")) as Record<string, unknown>;
     const body = ((payload.response as Record<string, unknown>)?.body ?? {}) as Record<string, unknown>;
@@ -70,6 +115,7 @@ async function fetchAwardsForDate(date: KstDate): Promise<Record<string, unknown
 async function fetchNoticeDetail(
   bidNtceNo: string,
   bidNtceOrd: string,
+  source: WorkSource,
 ): Promise<Record<string, unknown> | null> {
   const key = process.env.DATA_GO_KR_SERVICE_KEY;
   if (!key) throw new Error("DATA_GO_KR_SERVICE_KEY가 설정되지 않았습니다.");
@@ -81,7 +127,7 @@ async function fetchNoticeDetail(
     `bidNtceNo=${encodeURIComponent(bidNtceNo)}`,
     "type=json",
   ].join("&");
-  const response = await requestBuffer(`${NOTICE_DETAIL_URL}?${query}`);
+  const response = await requestBuffer(`${WORK_SOURCE_ENDPOINTS[source].detailUrl}?${query}`);
   if (response.status < 200 || response.status >= 300) return null;
   const payload = JSON.parse(response.body.toString("utf8")) as Record<string, unknown>;
   const items = normalizeItems(payload);
@@ -89,9 +135,10 @@ async function fetchNoticeDetail(
   return items.find((item) => Number(item.bidNtceOrd) === wanted) ?? items[0] ?? null;
 }
 
-// 요구사항 1: "업무구분"(공종) 필터. 나라장터 상세 API의 주공종명/부공종명 필드는
+// 요구사항: "업무구분"(공종) 필터. 나라장터 상세 API의 주공종명/부공종명 필드는
 // 실제로 비어있는 경우가 많아, 채워져 있으면 그것으로 판단하고 비어 있으면 공고명 등
-// 텍스트에서 설정된 공종 키워드를 찾는 방식으로 대체한다(하이브리드).
+// 텍스트에서 설정된 공종 키워드를 찾는 방식으로 대체한다(하이브리드). 이 필드들은
+// 공사(Cnstwk) 공고에만 존재하므로 물품/용역 공고에는 적용하지 않는다(호출부 참고).
 function classifyWorkType(
   detail: Record<string, unknown>,
   workTypeKeywords: string[],
@@ -119,6 +166,52 @@ function guessSiteOffice(text: string): string | null {
   return match ? match[2].trim() : null;
 }
 
+// 요구사항 7, 8: 정부 낙찰기록에 낙찰자 주소/전화가 비어있으면, 이미 다운로드해 둔
+// 첨부파일 텍스트에서 먼저 찾아보고(무료), 그래도 없으면 네이버 지역검색 API로
+// 최후 보완한다(NAVER_CLIENT_ID/SECRET 필요, 없으면 조용히 건너뜀). 어느 경로로
+// 채웠는지는 contactSource로 남겨 화면/엑셀에서 신뢰도를 구분할 수 있게 한다.
+async function resolveBidderContact(
+  bidderName: string | null,
+  addressFromAward: string | null,
+  phoneFromAward: string | null,
+  attachmentText: string,
+): Promise<{ address: string | null; phone: string | null; contactSource: "government" | "attachment" | "portal" | null }> {
+  let address = addressFromAward;
+  let phone = phoneFromAward;
+  let contactSource: "government" | "attachment" | "portal" | null = address || phone ? "government" : null;
+
+  if (!bidderName) return { address, phone, contactSource };
+  const needsAddress = !address;
+  const needsPhone = !phone;
+  if (!needsAddress && !needsPhone) return { address, phone, contactSource };
+
+  const fromAttachment = extractBusinessContactFromText(attachmentText, bidderName);
+  if (needsAddress && fromAttachment.address) {
+    address = fromAttachment.address;
+    contactSource = "attachment";
+  }
+  if (needsPhone && fromAttachment.phone) {
+    phone = fromAttachment.phone;
+    contactSource = "attachment";
+  }
+
+  if (address && phone) return { address, phone, contactSource };
+
+  const fromPortal = await searchBusinessContactOnPortal(bidderName);
+  if (fromPortal) {
+    if (!address && fromPortal.address) {
+      address = fromPortal.address;
+      contactSource = "portal";
+    }
+    if (!phone && fromPortal.phone) {
+      phone = fromPortal.phone;
+      contactSource = "portal";
+    }
+  }
+
+  return { address, phone, contactSource };
+}
+
 // 스캔 실행 기록만 즉시 만들어 반환한다 (수동 트리거 API가 바로 202로 응답할 수
 // 있도록). 실제 스캔은 executeScanRun에서 진행되며 몇 분씩 걸릴 수 있다.
 export async function createPendingScanRun(triggerType: "schedule" | "manual"): Promise<DailyScanRun> {
@@ -137,152 +230,204 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
     const [year, month, day] = key.split("-").map(Number);
     return { key, compact: key.replaceAll("-", ""), year, month, day, weekday: 0 } as KstDate;
   });
+  const workSources = resolveWorkSources(settings.workCategories);
 
   let awardsFound = 0;
   let candidatesChecked = 0;
   let matchesFound = 0;
 
+  // 같은 낙찰자가 여러 건 매칭되면(같은 공고의 여러 첨부파일, 또는 여러 공고를
+  // 함께 낙찰) 네이버 API를 그때마다 새로 호출하지 않도록 낙찰자 이름 기준으로
+  // 이번 스캔 실행 동안만 결과를 캐시한다 (무료 API 호출 한도 보호).
+  const contactCache = new Map<
+    string,
+    ReturnType<typeof resolveBidderContact> extends Promise<infer T> ? T : never
+  >();
+  async function resolveBidderContactCached(
+    bidderName: string | null,
+    addressFromAward: string | null,
+    phoneFromAward: string | null,
+    attachmentText: string,
+  ) {
+    const cacheKey = `${bidderName ?? ""}|${addressFromAward ?? ""}|${phoneFromAward ?? ""}`;
+    const cached = contactCache.get(cacheKey);
+    if (cached) return cached;
+    const resolved = await resolveBidderContact(bidderName, addressFromAward, phoneFromAward, attachmentText);
+    contactCache.set(cacheKey, resolved);
+    return resolved;
+  }
+
   try {
-    const awardItems: Record<string, unknown>[] = [];
-    for (const date of targetDates) {
-      awardItems.push(...(await fetchAwardsForDate(date)));
-    }
-    // 요구사항 1: 최종 낙찰자가 확정된 공고만.
-    const confirmedAwards = awardItems.filter((item) => String(item.bidwinnrNm ?? "").trim().length > 0);
-    awardsFound = confirmedAwards.length;
-
-    // 예산(공사 규모) 사전 필터: 상세 조회는 비용이 크므로, 낙찰금액(통상 예산의
-    // 80~90%)으로 먼저 걸러낸다. 정확한 기준(bdgtAmt)은 상세 조회 후 다시 확인한다.
-    const cheapCandidates = confirmedAwards.filter((item) => {
-      const bidAmount = Number(item.sucsfbidAmt ?? 0);
-      if (!bidAmount) return true;
-      return bidAmount >= settings.minBudgetAmount * 0.5;
-    });
-
-    for (const award of cheapCandidates) {
-      const bidNtceNo = String(award.bidNtceNo ?? "").trim();
-      const bidNtceOrd = String(award.bidNtceOrd ?? "").trim();
-      if (!bidNtceNo || !bidNtceOrd) continue;
-      const noticeNumber = `${bidNtceNo}-${bidNtceOrd.padStart(3, "0")}`;
-      candidatesChecked += 1;
-
-      let detail: Record<string, unknown> | null = null;
-      try {
-        const lookup = await withRetry(() => fetchNoticeDetail(bidNtceNo, bidNtceOrd), 2);
-        detail = lookup.value;
-      } catch (error) {
-        logger.warn({ err: error, noticeNumber }, "일별 스캔: 공고 상세 조회 실패");
-        continue;
+    for (const source of workSources) {
+      const awardItems: Record<string, unknown>[] = [];
+      for (const date of targetDates) {
+        try {
+          awardItems.push(...(await fetchAwardsForDate(date, source)));
+        } catch (error) {
+          // 업무구분 하나가 실패해도 나머지(예: 공사)는 계속 진행한다.
+          logger.warn({ err: error, source, date: date.key }, "일별 스캔: 낙찰 목록 조회 실패");
+        }
       }
-      if (!detail) continue;
+      // 요구사항: 최종 낙찰자가 확정된 공고만.
+      const confirmedAwards = awardItems.filter((item) => String(item.bidwinnrNm ?? "").trim().length > 0);
+      awardsFound += confirmedAwards.length;
 
-      // 요구사항 3: 공사 규모 필터 (최종 확인).
-      const budgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0);
-      if (budgetAmount < settings.minBudgetAmount) continue;
+      // 예산(공사 규모) 사전 필터: 상세 조회는 비용이 크므로, 낙찰금액(통상 예산의
+      // 80~90%)으로 먼저 걸러낸다. 정확한 기준(bdgtAmt)은 상세 조회 후 다시 확인한다.
+      const cheapCandidates = confirmedAwards.filter((item) => {
+        const bidAmount = Number(item.sucsfbidAmt ?? 0);
+        if (!bidAmount) return true;
+        return bidAmount >= settings.minBudgetAmount * 0.5;
+      });
 
-      // 요구사항 1: 업무구분(공종) 필터.
-      const { matched: workTypeMatched, workTypeName } = classifyWorkType(detail, settings.workTypeKeywords);
-      if (!workTypeMatched) continue;
+      for (const award of cheapCandidates) {
+        const bidNtceNo = String(award.bidNtceNo ?? "").trim();
+        const bidNtceOrd = String(award.bidNtceOrd ?? "").trim();
+        if (!bidNtceNo || !bidNtceOrd) continue;
+        const noticeNumber = `${bidNtceNo}-${bidNtceOrd.padStart(3, "0")}`;
+        candidatesChecked += 1;
 
-      // 요구사항 4, 5: 공사 내역/요청서 첨부파일에서 키워드 검색.
-      const attachments = collectAttachments(detail).sort(
-        (a, b) => Number(isPriorityAttachment(b.name)) - Number(isPriorityAttachment(a.name)),
-      );
-      if (attachments.length === 0) continue;
+        let detail: Record<string, unknown> | null = null;
+        try {
+          const lookup = await withRetry(() => fetchNoticeDetail(bidNtceNo, bidNtceOrd, source), 2);
+          detail = lookup.value;
+        } catch (error) {
+          logger.warn({ err: error, noticeNumber, source }, "일별 스캔: 공고 상세 조회 실패");
+          continue;
+        }
+        if (!detail) continue;
 
-      const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-"));
-      try {
-        for (const attachment of attachments) {
-          let downloadedPath: string;
-          try {
-            const download = await withRetry(
-              () => downloadAttachment(attachment.url, scratchDir, attachment.name),
-              2,
-            );
-            downloadedPath = download.value;
-          } catch (error) {
-            logger.warn({ err: error, noticeNumber, fileName: attachment.name }, "일별 스캔: 첨부파일 다운로드 실패");
-            continue;
-          }
+        // 요구사항 3: 공사 규모 필터 (최종 확인).
+        const budgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0);
+        if (budgetAmount < settings.minBudgetAmount) continue;
 
-          let searchRoots = [downloadedPath];
-          if (path.extname(downloadedPath).toLowerCase() === ".zip") {
+        // 요구사항 2: 추정가격(presmptPrce) 범위 필터. 값이 있을 때만 적용한다 —
+        // 일부 공고는 추정가격을 공개하지 않아 0/누락으로 오는 경우가 있는데, 그런
+        // 공고까지 걸러내면 위의 예산 기준 필터와 상충해 리드를 놓치게 된다.
+        const estimatedAmount = Number(detail.presmptPrce ?? 0) || null;
+        if (estimatedAmount != null) {
+          if (settings.minEstimatedPrice != null && estimatedAmount < settings.minEstimatedPrice) continue;
+          if (settings.maxEstimatedPrice != null && estimatedAmount > settings.maxEstimatedPrice) continue;
+        }
+
+        // 요구사항 1: 업무구분(공종) 필터 — 공사 카테고리에만 의미가 있다(주공종명/
+        // 부공종명은 Cnstwk 응답에만 존재).
+        const { matched: workTypeMatched, workTypeName } =
+          source === "공사" ? classifyWorkType(detail, settings.workTypeKeywords) : { matched: true, workTypeName: null };
+        if (!workTypeMatched) continue;
+
+        // 요구사항 4, 5: 공사 내역/요청서 첨부파일에서 키워드(=우리가 설정한 품목) 검색.
+        const attachments = collectAttachments(detail).sort(
+          (a, b) => Number(isPriorityAttachment(b.name)) - Number(isPriorityAttachment(a.name)),
+        );
+        if (attachments.length === 0) continue;
+
+        const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-"));
+        try {
+          for (const attachment of attachments) {
+            let downloadedPath: string;
             try {
-              searchRoots = await extractZipRecursively(downloadedPath);
+              const download = await withRetry(
+                () => downloadAttachment(attachment.url, scratchDir, attachment.name),
+                2,
+              );
+              downloadedPath = download.value;
             } catch (error) {
-              logger.warn({ err: error, noticeNumber, fileName: attachment.name }, "일별 스캔: ZIP 압축 해제 실패");
+              logger.warn({ err: error, noticeNumber, fileName: attachment.name }, "일별 스캔: 첨부파일 다운로드 실패");
               continue;
             }
-          }
 
-          for (const searchablePath of searchRoots) {
-            if (path.extname(searchablePath).toLowerCase() === ".zip") continue;
-            if ((await stat(searchablePath)).isDirectory()) continue;
-            let segments;
-            try {
-              segments = await extractSegments(searchablePath);
-            } catch {
-              continue;
-            }
-            // 요구사항 4: 설정된 키워드(기본 "부직포")가 있는 공고만.
-            const matches = searchSegments(segments, settings.matchKeywords);
-            if (matches.length === 0) continue;
-
-            // 요구사항 6: 매칭된 첨부파일을 영구 저장(볼륨)한다.
-            const matchedFileName = sanitizeName(attachment.name);
-            const storedDir = path.join(SCAN_ROOT, noticeNumber);
-            await mkdir(storedDir, { recursive: true });
-            const storedPath = path.join(storedDir, path.basename(searchablePath));
-            await copyFile(searchablePath, storedPath).catch(() => {});
-
-            for (const match of matches) {
-              const matchedKeyword = match.foundKeywords[0] ?? settings.matchKeywords[0] ?? "";
-              const itemFields = extractItemFields(match.originalText, settings.matchKeywords);
-              const quantityText =
-                [itemFields.itemQuantity, itemFields.itemUnit]
-                  .filter((value) => value && value !== "미공개/확인불가")
-                  .join(" ") || null;
-              // 요구사항 8: 현장명 / 현장사무소 / 수량.
-              const siteOffice =
-                guessSiteOffice(match.surroundingText) ??
-                guessSiteOffice(match.originalText) ??
-                (detail.dminsttNm ? `${String(detail.dminsttNm)} (발주기관 문의)` : null);
-
+            let searchRoots = [downloadedPath];
+            if (path.extname(downloadedPath).toLowerCase() === ".zip") {
               try {
-                const inserted = await db
-                  .insert(awardedMatchesTable)
-                  .values({
-                    scanRunId: run.id,
-                    noticeNumber,
-                    noticeName: String(detail.bidNtceNm ?? "").trim() || null,
-                    siteName: String(detail.bidNtceNm ?? "").trim() || null,
-                    siteOffice,
-                    workTypeName,
-                    demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
-                    bidderName: String(award.bidwinnrNm ?? "").trim() || null,
-                    bidderBizno: String(award.bidwinnrBizno ?? "").trim() || null,
-                    bidderAddress: String(award.bidwinnrAdrs ?? "").trim() || null,
-                    bidderPhone: String(award.bidwinnrTelNo ?? "").trim() || null,
-                    budgetAmount: budgetAmount || null,
-                    awardAmount: Number(award.sucsfbidAmt ?? 0) || null,
-                    awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
-                    matchedKeyword,
-                    quantityText,
-                    surroundingText: match.surroundingText,
-                    attachmentFileName: matchedFileName,
-                    attachmentStoredPath: path.relative(SCAN_ROOT, storedPath),
-                  })
-                  .onConflictDoNothing()
-                  .returning({ id: awardedMatchesTable.id });
-                if (inserted.length > 0) matchesFound += 1;
+                searchRoots = await extractZipRecursively(downloadedPath);
               } catch (error) {
-                logger.warn({ err: error, noticeNumber }, "일별 스캔: 매칭 결과 저장 실패");
+                logger.warn({ err: error, noticeNumber, fileName: attachment.name }, "일별 스캔: ZIP 압축 해제 실패");
+                continue;
+              }
+            }
+
+            for (const searchablePath of searchRoots) {
+              if (path.extname(searchablePath).toLowerCase() === ".zip") continue;
+              if ((await stat(searchablePath)).isDirectory()) continue;
+              let segments;
+              try {
+                segments = await extractSegments(searchablePath);
+              } catch {
+                continue;
+              }
+              // 요구사항 4: 설정된 키워드(=선택한 품목, 기본 "부직포")가 있는 공고만.
+              const matches = searchSegments(segments, settings.matchKeywords);
+              if (matches.length === 0) continue;
+
+              // 요구사항 6: 매칭된 첨부파일을 영구 저장(볼륨)한다.
+              const matchedFileName = sanitizeName(attachment.name);
+              const storedDir = path.join(SCAN_ROOT, noticeNumber);
+              await mkdir(storedDir, { recursive: true });
+              const storedPath = path.join(storedDir, path.basename(searchablePath));
+              await copyFile(searchablePath, storedPath).catch(() => {});
+
+              for (const match of matches) {
+                const matchedKeyword = match.foundKeywords[0] ?? settings.matchKeywords[0] ?? "";
+                const itemFields = extractItemFields(match.originalText, settings.matchKeywords);
+                const quantityText =
+                  [itemFields.itemQuantity, itemFields.itemUnit]
+                    .filter((value) => value && value !== "미공개/확인불가")
+                    .join(" ") || null;
+                // 요구사항 6: 현장명 / 현장사무소 / 수량.
+                const siteOffice =
+                  guessSiteOffice(match.surroundingText) ??
+                  guessSiteOffice(match.originalText) ??
+                  (detail.dminsttNm ? `${String(detail.dminsttNm)} (발주기관 문의)` : null);
+
+                // 요구사항 7, 8: 낙찰자 연락처/주소 — 정부 기록에 없으면 첨부파일,
+                // 그래도 없으면 네이버 API로 보완.
+                const { address: bidderAddress, phone: bidderPhone, contactSource } = await resolveBidderContactCached(
+                  String(award.bidwinnrNm ?? "").trim() || null,
+                  String(award.bidwinnrAdrs ?? "").trim() || null,
+                  String(award.bidwinnrTelNo ?? "").trim() || null,
+                  `${match.surroundingText}\n${match.originalText}`,
+                );
+
+                try {
+                  const inserted = await db
+                    .insert(awardedMatchesTable)
+                    .values({
+                      scanRunId: run.id,
+                      noticeNumber,
+                      noticeName: String(detail.bidNtceNm ?? "").trim() || null,
+                      siteName: String(detail.bidNtceNm ?? "").trim() || null,
+                      siteOffice,
+                      workTypeName,
+                      workCategory: source,
+                      demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
+                      bidderName: String(award.bidwinnrNm ?? "").trim() || null,
+                      bidderBizno: String(award.bidwinnrBizno ?? "").trim() || null,
+                      bidderAddress,
+                      bidderPhone,
+                      contactSource,
+                      budgetAmount: budgetAmount || null,
+                      estimatedAmount,
+                      awardAmount: Number(award.sucsfbidAmt ?? 0) || null,
+                      awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
+                      matchedKeyword,
+                      quantityText,
+                      surroundingText: match.surroundingText,
+                      attachmentFileName: matchedFileName,
+                      attachmentStoredPath: path.relative(SCAN_ROOT, storedPath),
+                    })
+                    .onConflictDoNothing()
+                    .returning({ id: awardedMatchesTable.id });
+                  if (inserted.length > 0) matchesFound += 1;
+                } catch (error) {
+                  logger.warn({ err: error, noticeNumber }, "일별 스캔: 매칭 결과 저장 실패");
+                }
               }
             }
           }
+        } finally {
+          await rm(scratchDir, { recursive: true, force: true });
         }
-      } finally {
-        await rm(scratchDir, { recursive: true, force: true });
       }
     }
 

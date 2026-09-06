@@ -5,10 +5,17 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AppSettingsWorkCategoriesItem } from './appSettingsWorkCategoriesItem';
 
 export interface AppSettings {
   matchKeywords: string[];
   workTypeKeywords: string[];
+  /** 업무구분(물품/일반용역/기술용역/공사). 나라장터 API가 실제로 지원하는 값만 받는다 — 기타/민간은 별도 데이터 연동이 필요해 아직 지원하지 않는다. */
+  workCategories: AppSettingsWorkCategoriesItem[];
+  /** @nullable */
+  minEstimatedPrice?: number | null;
+  /** @nullable */
+  maxEstimatedPrice?: number | null;
   minBudgetAmount: number;
   updatedAt: string;
 }

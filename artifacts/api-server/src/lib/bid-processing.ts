@@ -616,7 +616,7 @@ const BUSINESS_ADDRESS_PATTERN =
 // text and, if found, pulls an address/phone mentioned nearby. Free — no
 // network call — so this is always tried before the paid/rate-limited portal
 // search below.
-function extractBusinessContactFromText(
+export function extractBusinessContactFromText(
   text: string,
   companyName: string,
 ): { address?: string; phone?: string } {
@@ -665,7 +665,7 @@ async function findBusinessContactInAttachments(
 // NAVER_CLIENT_SECRET, see replit.md) — used only as a last resort when
 // neither the government award record nor the notice's attachments have
 // contact details for the winning bidder.
-async function searchBusinessContactOnPortal(
+export async function searchBusinessContactOnPortal(
   companyName: string,
 ): Promise<{ address?: string; phone?: string } | null> {
   const clientId = process.env.NAVER_CLIENT_ID;

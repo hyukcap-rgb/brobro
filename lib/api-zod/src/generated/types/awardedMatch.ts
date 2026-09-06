@@ -19,6 +19,11 @@ export interface AwardedMatch {
   siteOffice?: string | null;
   /** @nullable */
   workTypeName?: string | null;
+  /**
+     * 이 공고를 찾아낸 업무구분(물품/용역/공사).
+     * @nullable
+     */
+  workCategory?: string | null;
   /** @nullable */
   demandAgency?: string | null;
   /** @nullable */
@@ -29,8 +34,15 @@ export interface AwardedMatch {
   bidderAddress?: string | null;
   /** @nullable */
   bidderPhone?: string | null;
+  /**
+     * 낙찰자 연락처/주소의 출처 (government/attachment/portal).
+     * @nullable
+     */
+  contactSource?: string | null;
   /** @nullable */
   budgetAmount?: number | null;
+  /** @nullable */
+  estimatedAmount?: number | null;
   /** @nullable */
   awardAmount?: number | null;
   /** @nullable */

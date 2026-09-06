@@ -8,6 +8,8 @@
 
 export * from './appSettings';
 export * from './appSettingsInput';
+export * from './appSettingsInputWorkCategoriesItem';
+export * from './appSettingsWorkCategoriesItem';
 export * from './authUser';
 export * from './awardedMatch';
 export * from './bidAttachmentResult';

@@ -22,12 +22,18 @@ export const awardedMatchesTable = pgTable(
     siteName: text("site_name"),
     siteOffice: text("site_office"),
     workTypeName: text("work_type_name"),
+    // 이 공고를 어떤 업무구분 API(물품/용역/공사)로 찾았는지.
+    workCategory: text("work_category"),
     demandAgency: text("demand_agency"),
     bidderName: text("bidder_name"),
     bidderBizno: text("bidder_bizno"),
     bidderAddress: text("bidder_address"),
     bidderPhone: text("bidder_phone"),
+    // 낙찰자 주소/연락처를 어디서 채웠는지: government(정부 낙찰기록) /
+    // attachment(첨부파일에서 추출) / portal(네이버 지역검색 API로 보완).
+    contactSource: text("contact_source"),
     budgetAmount: bigint("budget_amount", { mode: "number" }),
+    estimatedAmount: bigint("estimated_amount", { mode: "number" }),
     awardAmount: bigint("award_amount", { mode: "number" }),
     awardDate: text("award_date"),
     matchedKeyword: text("matched_keyword").notNull(),

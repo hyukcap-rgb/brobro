@@ -275,17 +275,55 @@ export interface AuthUser {
   username: string | null;
 }
 
+export type AppSettingsWorkCategoriesItem = typeof AppSettingsWorkCategoriesItem[keyof typeof AppSettingsWorkCategoriesItem];
+
+
+export const AppSettingsWorkCategoriesItem = {
+  물품: '물품',
+  일반용역: '일반용역',
+  기술용역: '기술용역',
+  공사: '공사',
+} as const;
+
 export interface AppSettings {
   matchKeywords: string[];
   workTypeKeywords: string[];
+  /** 업무구분(물품/일반용역/기술용역/공사). 나라장터 API가 실제로 지원하는 값만 받는다 — 기타/민간은 별도 데이터 연동이 필요해 아직 지원하지 않는다. */
+  workCategories: AppSettingsWorkCategoriesItem[];
+  /** @nullable */
+  minEstimatedPrice?: number | null;
+  /** @nullable */
+  maxEstimatedPrice?: number | null;
   minBudgetAmount: number;
   updatedAt: string;
 }
+
+export type AppSettingsInputWorkCategoriesItem = typeof AppSettingsInputWorkCategoriesItem[keyof typeof AppSettingsInputWorkCategoriesItem];
+
+
+export const AppSettingsInputWorkCategoriesItem = {
+  물품: '물품',
+  일반용역: '일반용역',
+  기술용역: '기술용역',
+  공사: '공사',
+} as const;
 
 export interface AppSettingsInput {
   /** @minItems 1 */
   matchKeywords?: string[];
   workTypeKeywords?: string[];
+  /** @minItems 1 */
+  workCategories?: AppSettingsInputWorkCategoriesItem[];
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  minEstimatedPrice?: number | null;
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  maxEstimatedPrice?: number | null;
   /** @minimum 0 */
   minBudgetAmount?: number;
 }
@@ -303,6 +341,11 @@ export interface AwardedMatch {
   siteOffice?: string | null;
   /** @nullable */
   workTypeName?: string | null;
+  /**
+     * 이 공고를 찾아낸 업무구분(물품/용역/공사).
+     * @nullable
+     */
+  workCategory?: string | null;
   /** @nullable */
   demandAgency?: string | null;
   /** @nullable */
@@ -313,8 +356,15 @@ export interface AwardedMatch {
   bidderAddress?: string | null;
   /** @nullable */
   bidderPhone?: string | null;
+  /**
+     * 낙찰자 연락처/주소의 출처 (government/attachment/portal).
+     * @nullable
+     */
+  contactSource?: string | null;
   /** @nullable */
   budgetAmount?: number | null;
+  /** @nullable */
+  estimatedAmount?: number | null;
   /** @nullable */
   awardAmount?: number | null;
   /** @nullable */

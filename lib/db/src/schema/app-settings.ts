@@ -8,6 +8,12 @@ export const appSettingsTable = pgTable("app_settings", {
   id: smallint("id").primaryKey().default(1),
   matchKeywords: jsonb("match_keywords").$type<string[]>().notNull(),
   workTypeKeywords: jsonb("work_type_keywords").$type<string[]>().notNull(),
+  // 업무구분(물품/일반용역/기술용역/공사) - 나라장터 API가 실제로 지원하는 값만.
+  // 기타/민간은 별도 API 연동(누리장터)이 필요해 아직 지원하지 않는다.
+  workCategories: jsonb("work_categories").$type<string[]>().notNull(),
+  // 추정가격(presmptPrce) 범위. 둘 다 null이면 추정가격으로는 거르지 않는다.
+  minEstimatedPrice: bigint("min_estimated_price", { mode: "number" }),
+  maxEstimatedPrice: bigint("max_estimated_price", { mode: "number" }),
   minBudgetAmount: bigint("min_budget_amount", { mode: "number" }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

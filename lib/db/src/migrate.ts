@@ -26,6 +26,15 @@ export async function ensureSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- 업무구분 선택(물품/일반용역/기술용역/공사)과 추정가격 범위 필터. 이미 배포된
+    -- 테이블에는 없는 컬럼이라 ALTER ... ADD COLUMN IF NOT EXISTS로 보강한다.
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS work_categories JSONB;
+    UPDATE app_settings SET work_categories = '["물품","일반용역","기술용역","공사"]'::jsonb
+      WHERE work_categories IS NULL;
+    ALTER TABLE app_settings ALTER COLUMN work_categories SET NOT NULL;
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS min_estimated_price BIGINT;
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS max_estimated_price BIGINT;
+
     CREATE TABLE IF NOT EXISTS daily_scan_runs (
       id SERIAL PRIMARY KEY,
       target_dates JSONB NOT NULL,
@@ -66,6 +75,11 @@ export async function ensureSchema(): Promise<void> {
 
     CREATE UNIQUE INDEX IF NOT EXISTS awarded_matches_unique_hit
       ON awarded_matches (notice_number, matched_keyword, attachment_file_name);
+
+    -- 업무구분 다중 API 지원 + 추정가격 + 연락처 출처(정부기록/첨부파일/네이버 포털).
+    ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS work_category TEXT;
+    ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS contact_source TEXT;
+    ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS estimated_amount BIGINT;
 
     -- express-session's store (connect-pg-simple) ships a table.sql asset it
     -- reads from disk to create this table on demand ("createTableIfMissing").

@@ -50,6 +50,9 @@ export const GetCurrentUserResponse = zod.object({
 export const GetSettingsResponse = zod.object({
   "matchKeywords": zod.array(zod.string()),
   "workTypeKeywords": zod.array(zod.string()),
+  "workCategories": zod.array(zod.enum(['물품', '일반용역', '기술용역', '공사'])).describe('업무구분(물품\/일반용역\/기술용역\/공사). 나라장터 API가 실제로 지원하는 값만 받는다 — 기타\/민간은 별도 데이터 연동이 필요해 아직 지원하지 않는다.'),
+  "minEstimatedPrice": zod.number().nullish(),
+  "maxEstimatedPrice": zod.number().nullish(),
   "minBudgetAmount": zod.number(),
   "updatedAt": zod.string()
 })
@@ -59,6 +62,11 @@ export const GetSettingsResponse = zod.object({
  * @summary Update the daily scan settings
  */
 
+
+export const updateSettingsBodyMinEstimatedPriceMin = 0;
+
+export const updateSettingsBodyMaxEstimatedPriceMin = 0;
+
 export const updateSettingsBodyMinBudgetAmountMin = 0;
 
 
@@ -66,12 +74,18 @@ export const updateSettingsBodyMinBudgetAmountMin = 0;
 export const UpdateSettingsBody = zod.object({
   "matchKeywords": zod.array(zod.string()).min(1).optional(),
   "workTypeKeywords": zod.array(zod.string()).optional(),
+  "workCategories": zod.array(zod.enum(['물품', '일반용역', '기술용역', '공사'])).min(1).optional(),
+  "minEstimatedPrice": zod.number().min(updateSettingsBodyMinEstimatedPriceMin).nullish(),
+  "maxEstimatedPrice": zod.number().min(updateSettingsBodyMaxEstimatedPriceMin).nullish(),
   "minBudgetAmount": zod.number().min(updateSettingsBodyMinBudgetAmountMin).optional()
 })
 
 export const UpdateSettingsResponse = zod.object({
   "matchKeywords": zod.array(zod.string()),
   "workTypeKeywords": zod.array(zod.string()),
+  "workCategories": zod.array(zod.enum(['물품', '일반용역', '기술용역', '공사'])).describe('업무구분(물품\/일반용역\/기술용역\/공사). 나라장터 API가 실제로 지원하는 값만 받는다 — 기타\/민간은 별도 데이터 연동이 필요해 아직 지원하지 않는다.'),
+  "minEstimatedPrice": zod.number().nullish(),
+  "maxEstimatedPrice": zod.number().nullish(),
   "minBudgetAmount": zod.number(),
   "updatedAt": zod.string()
 })
@@ -93,12 +107,15 @@ export const ListMatchesResponse = zod.object({
   "siteName": zod.string().nullish(),
   "siteOffice": zod.string().nullish(),
   "workTypeName": zod.string().nullish(),
+  "workCategory": zod.string().nullish().describe('이 공고를 찾아낸 업무구분(물품\/용역\/공사).'),
   "demandAgency": zod.string().nullish(),
   "bidderName": zod.string().nullish(),
   "bidderBizno": zod.string().nullish(),
   "bidderAddress": zod.string().nullish(),
   "bidderPhone": zod.string().nullish(),
+  "contactSource": zod.string().nullish().describe('낙찰자 연락처\/주소의 출처 (government\/attachment\/portal).'),
   "budgetAmount": zod.number().nullish(),
+  "estimatedAmount": zod.number().nullish(),
   "awardAmount": zod.number().nullish(),
   "awardDate": zod.string().nullish(),
   "matchedKeyword": zod.string(),

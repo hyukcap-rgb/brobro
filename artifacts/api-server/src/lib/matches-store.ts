@@ -29,23 +29,32 @@ export async function getScanRun(id: number): Promise<DailyScanRun | null> {
 }
 
 const MATCH_HEADERS = [
-  "공고번호", "현장명(공고명)", "발주기관", "업무구분", "낙찰자", "사업자등록번호",
-  "낙찰자 주소", "낙찰자 전화", "현장사무소", "부직포 수량", "예산금액", "낙찰금액",
-  "낙찰일", "매칭 키워드", "첨부파일명", "확인시각",
+  "공고번호", "현장명(공고명)", "발주기관", "업무구분", "공종", "낙찰자", "사업자등록번호",
+  "낙찰자 주소", "낙찰자 전화", "연락처 출처", "현장사무소", "부직포 수량",
+  "추정가격", "예산금액", "낙찰금액", "낙찰일", "매칭 키워드", "첨부파일명", "확인시각",
 ];
+
+const CONTACT_SOURCE_LABELS: Record<string, string> = {
+  government: "정부 낙찰기록",
+  attachment: "첨부파일에서 추출",
+  portal: "포털 검색 보완",
+};
 
 function matchRow(match: AwardedMatch): string[] {
   return [
     match.noticeNumber,
     match.siteName ?? match.noticeName ?? "",
     match.demandAgency ?? "",
+    match.workCategory ?? "",
     match.workTypeName ?? "",
     match.bidderName ?? "",
     match.bidderBizno ?? "",
     match.bidderAddress ?? "",
     match.bidderPhone ?? "",
+    (match.contactSource && CONTACT_SOURCE_LABELS[match.contactSource]) ?? "",
     match.siteOffice ?? "",
     match.quantityText ?? "",
+    match.estimatedAmount != null ? String(match.estimatedAmount) : "",
     match.budgetAmount != null ? String(match.budgetAmount) : "",
     match.awardAmount != null ? String(match.awardAmount) : "",
     match.awardDate ?? "",
