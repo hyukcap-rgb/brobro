@@ -410,8 +410,18 @@ export default function Home() {
     <div className="min-h-screen bg-background pb-12 flex flex-col items-center">
       {/* Header */}
       <header className="w-full bg-card border-b border-border py-6 px-6 sticky top-0 z-10 shadow-sm">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
+        {/*
+          버튼 4~5개(ZIP/CSV/XLSX 다운로드 + 검색 기록 + 수집 시작)와 제목 영역이
+          한 줄(md:flex-row)에 다 들어가야 했는데, 좁은 화면 폭에서는 이 둘을 합친
+          너비가 실제 가용폭을 넘어섰다. 이때 flexbox 기본 동작상 제목 쪽 div는
+          shrink-0이 없으면 무한정 줄어들 수 있고, 한글(공백 없는 문장)은 글자
+          단위로 줄바꿈이 가능해서 극단적으로는 세로로 한 글자씩 쌓이는 現상이
+          발생했다. shrink-0으로 제목 영역이 항상 원래 너비를 유지하게 하고,
+          버튼을 md:flex-row 대신 더 넓은 lg 기준으로 옮겨 애매한 중간 폭에서는
+          제목/버튼이 세로로 쌓이도록(겹치거나 찌그러지지 않도록) 했다.
+        */}
+        <div className="max-w-6xl mx-auto flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="shrink-0">
             <div className="flex items-center gap-2 mb-1">
               <div className="bg-primary/10 text-primary p-1.5 rounded-md">
                 <Search className="w-5 h-5" />
@@ -424,7 +434,7 @@ export default function Home() {
               엑셀의 공고번호를 불러와 원하는 키워드로 첨부문서와 낙찰정보를 검색합니다.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             {isCompleted && (
               <div className="flex gap-2">
                 <Button 
