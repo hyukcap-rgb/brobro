@@ -10,7 +10,7 @@ import Matches from '@/pages/matches';
 import Settings from '@/pages/settings';
 import Login from '@/pages/login';
 import { useGetCurrentUser, useLogout, getGetCurrentUserQueryKey } from '@workspace/api-client-react';
-import { LogOut, Loader2, Search, ListChecks, Settings as SettingsIcon } from 'lucide-react';
+import { LogOut, Loader2, ListChecks, Settings as SettingsIcon } from 'lucide-react';
 import {
   Route,
   Switch,
@@ -25,8 +25,9 @@ function AppRoutes() {
   return (
     <RoutedErrorBoundary>
       <Switch>
-        <Route path="/" component={Home} />
+        <Route path="/" component={Matches} />
         <Route path="/matches" component={Matches} />
+        <Route path="/search" component={Home} />
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
       </Switch>
@@ -48,16 +49,19 @@ function NavBar() {
     `flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
       location === path ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'
     }`;
+  const isHome = location === '/' || location === '/matches';
 
   return (
     <header className="border-b bg-background sticky top-0 z-10">
       <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between gap-4">
         <div className="flex items-center gap-1">
-          <Link href="/" className={linkClass('/')}>
-            <Search className="h-4 w-4" /> 공고 검색
-          </Link>
-          <Link href="/matches" className={linkClass('/matches')}>
-            <ListChecks className="h-4 w-4" /> 누적 결과
+          <Link
+            href="/"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              isHome ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'
+            }`}
+          >
+            <ListChecks className="h-4 w-4" /> 검색 결과
           </Link>
           <Link href="/settings" className={linkClass('/settings')}>
             <SettingsIcon className="h-4 w-4" /> 설정
