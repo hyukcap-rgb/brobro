@@ -27,6 +27,10 @@ router.post("/auth/logout", (req, res) => {
 });
 
 router.get("/auth/me", (req, res) => {
+  // This reflects live session state, so it must never be served from a
+  // browser/proxy cache — a cached "logged out" response here made every
+  // login look like it silently failed even after it succeeded.
+  res.set("Cache-Control", "no-store");
   if (req.session?.userId) {
     res.json({ authenticated: true, username: req.session.username ?? null });
     return;

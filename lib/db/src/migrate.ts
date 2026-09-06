@@ -66,5 +66,21 @@ export async function ensureSchema(): Promise<void> {
 
     CREATE UNIQUE INDEX IF NOT EXISTS awarded_matches_unique_hit
       ON awarded_matches (notice_number, matched_keyword, attachment_file_name);
+
+    -- express-session's store (connect-pg-simple) ships a table.sql asset it
+    -- reads from disk to create this table on demand ("createTableIfMissing").
+    -- That file doesn't survive our esbuild bundling step, so relying on it
+    -- fails at runtime (ENOENT) and silently breaks session persistence —
+    -- every login "succeeds" but the session is never actually saved, so the
+    -- very next request looks logged out. We create the table ourselves here
+    -- instead (schema matches connect-pg-simple's own default exactly) and
+    -- set createTableIfMissing: false in app.ts.
+    CREATE TABLE IF NOT EXISTS "session" (
+      "sid" varchar NOT NULL COLLATE "default" PRIMARY KEY,
+      "sess" json NOT NULL,
+      "expire" timestamp(6) NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
   `);
 }

@@ -45,7 +45,12 @@ if (!process.env.SESSION_SECRET) {
 }
 app.use(
   session({
-    store: new PgSessionStore({ pool, tableName: "session", createTableIfMissing: true }),
+    // The "session" table is created by ensureSchema() at boot (see
+    // @workspace/db's migrate.ts) rather than by connect-pg-simple itself:
+    // createTableIfMissing reads a table.sql asset from disk at runtime,
+    // which doesn't survive esbuild bundling and fails with ENOENT in
+    // production, silently breaking every login.
+    store: new PgSessionStore({ pool, tableName: "session", createTableIfMissing: false }),
     secret: process.env.SESSION_SECRET || "brobro-dev-only-insecure-secret",
     resave: false,
     saveUninitialized: false,
