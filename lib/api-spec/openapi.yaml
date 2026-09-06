@@ -12,7 +12,214 @@ tags:
     description: Health operations
   - name: bids
     description: 나라장터 공사 입찰공고 및 첨부문서 수집
+  - name: auth
+    description: 관리자 로그인
+  - name: settings
+    description: 일별 자동 검색 설정 (키워드/업무구분/예산 기준)
+  - name: matches
+    description: 누적 키워드 매칭 결과 (영업 리드)
+  - name: scans
+    description: 일별 자동 검색 실행 이력
 paths:
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Log in with the admin account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUser"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Log out of the current session
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUser"
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [auth]
+      summary: Get the currently logged-in admin, if any
+      responses:
+        "200":
+          description: Current session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUser"
+  /settings:
+    get:
+      operationId: getSettings
+      tags: [settings]
+      summary: Get the daily scan settings
+      responses:
+        "200":
+          description: Current settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+    put:
+      operationId: updateSettings
+      tags: [settings]
+      summary: Update the daily scan settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppSettingsInput"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+  /matches:
+    get:
+      operationId: listMatches
+      tags: [matches]
+      summary: List cumulative keyword-matched awarded notices
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Matches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchListResponse"
+  /matches/export.csv:
+    get:
+      operationId: exportMatchesCsv
+      tags: [matches]
+      summary: Download all matches as CSV
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+  /matches/export.xlsx:
+    get:
+      operationId: exportMatchesXlsx
+      tags: [matches]
+      summary: Download all matches as XLSX
+      responses:
+        "200":
+          description: XLSX file
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+  /matches/{id}/attachment:
+    get:
+      operationId: downloadMatchAttachment
+      tags: [matches]
+      summary: Download the stored attachment for a matched notice
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Attachment file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /scans:
+    get:
+      operationId: listScans
+      tags: [scans]
+      summary: List daily scan run history
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Scan runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanRunListResponse"
+  /scans/{id}:
+    get:
+      operationId: getScan
+      tags: [scans]
+      summary: Get a single scan run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Scan run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanRun"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /scans/run:
+    post:
+      operationId: triggerScan
+      tags: [scans]
+      summary: Manually trigger a daily scan run
+      responses:
+        "202":
+          description: Scan run started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanRun"
   /healthz:
     get:
       operationId: healthCheck
@@ -506,4 +713,155 @@ components:
         error:
           type: string
       required: [error]
+    LoginInput:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+      required: [username, password]
+    AuthUser:
+      type: object
+      properties:
+        authenticated:
+          type: boolean
+        username:
+          type: ["string", "null"]
+      required: [authenticated, username]
+    AppSettings:
+      type: object
+      properties:
+        matchKeywords:
+          type: array
+          items:
+            type: string
+        workTypeKeywords:
+          type: array
+          items:
+            type: string
+        minBudgetAmount:
+          type: number
+        updatedAt:
+          type: string
+      required: [matchKeywords, workTypeKeywords, minBudgetAmount, updatedAt]
+    AppSettingsInput:
+      type: object
+      properties:
+        matchKeywords:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        workTypeKeywords:
+          type: array
+          items:
+            type: string
+        minBudgetAmount:
+          type: number
+          minimum: 0
+    AwardedMatch:
+      type: object
+      properties:
+        id:
+          type: number
+        scanRunId:
+          type: ["number", "null"]
+        noticeNumber:
+          type: string
+        noticeName:
+          type: ["string", "null"]
+        siteName:
+          type: ["string", "null"]
+        siteOffice:
+          type: ["string", "null"]
+        workTypeName:
+          type: ["string", "null"]
+        demandAgency:
+          type: ["string", "null"]
+        bidderName:
+          type: ["string", "null"]
+        bidderBizno:
+          type: ["string", "null"]
+        bidderAddress:
+          type: ["string", "null"]
+        bidderPhone:
+          type: ["string", "null"]
+        budgetAmount:
+          type: ["number", "null"]
+        awardAmount:
+          type: ["number", "null"]
+        awardDate:
+          type: ["string", "null"]
+        matchedKeyword:
+          type: string
+        quantityText:
+          type: ["string", "null"]
+        surroundingText:
+          type: ["string", "null"]
+        attachmentFileName:
+          type: ["string", "null"]
+        attachmentStoredPath:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - noticeNumber
+        - matchedKeyword
+        - createdAt
+    MatchListResponse:
+      type: object
+      properties:
+        matches:
+          type: array
+          items:
+            $ref: "#/components/schemas/AwardedMatch"
+      required: [matches]
+    ScanRun:
+      type: object
+      properties:
+        id:
+          type: number
+        targetDates:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [running, completed, failed]
+        triggerType:
+          type: string
+          enum: [schedule, manual]
+        awardsFound:
+          type: number
+        candidatesChecked:
+          type: number
+        matchesFound:
+          type: number
+        errorMessage:
+          type: ["string", "null"]
+        startedAt:
+          type: string
+        finishedAt:
+          type: ["string", "null"]
+      required:
+        - id
+        - targetDates
+        - status
+        - triggerType
+        - awardsFound
+        - candidatesChecked
+        - matchesFound
+        - startedAt
+    ScanRunListResponse:
+      type: object
+      properties:
+        scans:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScanRun"
+      required: [scans]
 

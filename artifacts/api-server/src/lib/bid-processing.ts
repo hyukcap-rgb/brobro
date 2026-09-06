@@ -34,7 +34,7 @@ const JOB_ROOT = path.join(
   process.env.RAILWAY_VOLUME_MOUNT_PATH || tmpdir(),
   "bid-attachment-jobs",
 );
-const DEFAULT_KEYWORDS = [
+export const DEFAULT_KEYWORDS = [
   "부직포",
   "토목용 부직포",
   "PET 부직포",
@@ -54,7 +54,7 @@ class CircuitOpenError extends Error {
   }
 }
 
-function describeError(error: unknown): string {
+export function describeError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
   const details = error as Error & {
     code?: string;
@@ -141,7 +141,7 @@ function recordNetworkSuccess(): void {
   networkCircuit.lastError = "";
 }
 
-async function requestBuffer(url: string, timeoutMs = 45_000, redirects = 0): Promise<{
+export async function requestBuffer(url: string, timeoutMs = 45_000, redirects = 0): Promise<{
   status: number;
   headers: Record<string, string | string[] | undefined>;
   body: Buffer;
@@ -337,7 +337,7 @@ export interface CollectionJob {
   error: string | null;
 }
 
-interface ExtractedSegment {
+export interface ExtractedSegment {
   text: string;
   itemContext?: string;
   sheet: string | null;
@@ -380,7 +380,7 @@ function stripXml(xml: string): string {
     .trim();
 }
 
-function sanitizeName(value: string, fallback = "attachment"): string {
+export function sanitizeName(value: string, fallback = "attachment"): string {
   let decoded = value;
   try {
     decoded = decodeURIComponent(value);
@@ -395,7 +395,7 @@ function sanitizeName(value: string, fallback = "attachment"): string {
   return cleaned.slice(0, 180) || fallback;
 }
 
-function formatServiceKey(key: string): string {
+export function formatServiceKey(key: string): string {
   return /%[0-9a-f]{2}/i.test(key) ? key : encodeURIComponent(key);
 }
 
@@ -405,7 +405,7 @@ function parseNoticeNumber(value: string): { base: string; order: string } {
   return { base: match[1], order: match[2] };
 }
 
-function normalizeItems(payload: unknown): Record<string, unknown>[] {
+export function normalizeItems(payload: unknown): Record<string, unknown>[] {
   if (!payload || typeof payload !== "object") return [];
   const root = payload as Record<string, unknown>;
   const response = (root.response ?? root) as Record<string, unknown>;
@@ -435,7 +435,7 @@ function parseXmlItems(xml: string): Record<string, unknown>[] {
   });
 }
 
-async function withRetry<T>(
+export async function withRetry<T>(
   operation: () => Promise<T>,
   maxAttempts = 3,
 ): Promise<AttemptResult<T>> {
@@ -521,7 +521,7 @@ async function fetchNotice(noticeNumber: string): Promise<Record<string, unknown
   return selected;
 }
 
-function compactDate(date: Date): string {
+export function compactDate(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`;
 }
@@ -566,7 +566,7 @@ async function fetchAwards(targets: Set<string>): Promise<Map<string, Record<str
   return found;
 }
 
-function extractItemFields(text: string, keywords: readonly string[] = DEFAULT_KEYWORDS): Pick<SearchResult, "itemName" | "itemSpecification" | "itemQuantity" | "itemUnit" | "itemAmount"> {
+export function extractItemFields(text: string, keywords: readonly string[] = DEFAULT_KEYWORDS): Pick<SearchResult, "itemName" | "itemSpecification" | "itemQuantity" | "itemUnit" | "itemAmount"> {
   const cellValues = text
     .split("|")
     .map((part) => part.trim().replace(/^[A-Z]+\d+=/, "").trim())
@@ -765,7 +765,7 @@ async function enrichKeywordResults(job: CollectionJob, awards: Map<string, Reco
   }
 }
 
-function collectAttachments(item: Record<string, unknown>): { name: string; url: string }[] {
+export function collectAttachments(item: Record<string, unknown>): { name: string; url: string }[] {
   const attachments: { name: string; url: string }[] = [];
   for (let index = 1; index <= 10; index += 1) {
     const url = String(item[`ntceSpecDocUrl${index}`] ?? "").trim();
@@ -775,7 +775,7 @@ function collectAttachments(item: Record<string, unknown>): { name: string; url:
   return attachments;
 }
 
-function isPriorityAttachment(fileName: string): boolean {
+export function isPriorityAttachment(fileName: string): boolean {
   return /(공내역|설계내역|물량내역|산출내역|내역서|수량산출|시방서)/i.test(fileName);
 }
 
@@ -808,7 +808,7 @@ function contentDispositionName(value: string | null): string | null {
   return plain?.[1] ?? null;
 }
 
-async function downloadAttachment(
+export async function downloadAttachment(
   url: string,
   directory: string,
   suggestedName: string,
@@ -824,7 +824,7 @@ async function downloadAttachment(
   return filePath;
 }
 
-async function command(command: string, args: string[], cwd?: string): Promise<string> {
+export async function command(command: string, args: string[], cwd?: string): Promise<string> {
   const result = await execFileAsync(command, args, {
     cwd,
     maxBuffer: 32 * 1024 * 1024,
@@ -869,7 +869,7 @@ async function extractZip(zipPath: string): Promise<string | null> {
   return target;
 }
 
-async function extractZipRecursively(zipPath: string, depth = 0): Promise<string[]> {
+export async function extractZipRecursively(zipPath: string, depth = 0): Promise<string[]> {
   if (depth > 5) return [];
   const target = await extractZip(zipPath);
   if (!target) return [];
@@ -1065,7 +1065,7 @@ async function extractLegacy(filePath: string, extension: string): Promise<Extra
     }));
 }
 
-async function extractSegments(filePath: string): Promise<ExtractedSegment[]> {
+export async function extractSegments(filePath: string): Promise<ExtractedSegment[]> {
   const extension = path.extname(filePath).toLowerCase();
   if ([".xlsx", ".xlsm"].includes(extension)) return extractXlsx(filePath);
   if (extension === ".docx") {
@@ -1090,7 +1090,7 @@ async function extractSegments(filePath: string): Promise<ExtractedSegment[]> {
   return [];
 }
 
-function searchSegments(segments: ExtractedSegment[], keywords: readonly string[]): {
+export function searchSegments(segments: ExtractedSegment[], keywords: readonly string[]): {
   keywordFound: boolean;
   foundKeywords: string[];
   sheet: string | null;

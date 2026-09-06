@@ -1,5 +1,8 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { ensureAdminSeeded } from "./lib/auth";
+import { startDailyScanScheduler } from "./lib/scheduler";
+import { ensureSchema } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
 
@@ -14,6 +17,13 @@ const port = Number(rawPort);
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
+
+ensureSchema()
+  .then(() => ensureAdminSeeded())
+  .then(() => startDailyScanScheduler())
+  .catch((err: unknown) => {
+    logger.error({ err }, "Could not initialize database schema/admin account");
+  });
 
 app.listen(port, (err) => {
   if (err) {
