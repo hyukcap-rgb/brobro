@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { Fragment, useEffect, useRef, useState } from "react"
 import { 
   useStartBidCollection, 
   useGetBidCollectionStatus,
@@ -14,10 +14,15 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
 import {
   FileText, Play, Download, Search, FileDown,
   CheckCircle2, XCircle, Loader2, Clock, AlertCircle, FileArchive, Table as TableIcon,
-  Upload, RefreshCw, X, ExternalLink, History, FolderOpen
+  Upload, RefreshCw, X, ExternalLink, History, FolderOpen, ChevronDown, ChevronsDown, ChevronsUp,
+  MapPin, Package, Phone, Building2, FileWarning, FileClock, FileCheck2, ArrowUpDown
 } from "lucide-react"
 
 interface JobHistoryEntry {
@@ -59,6 +64,28 @@ export default function Home() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const resultPreviewRef = useRef<HTMLDivElement>(null);
+  // 결과 미리보기: 키워드가 실제로 발견된 행은 기본으로 펼쳐서 보여주고,
+  // 나머지는 접어서 한눈에 스캔할 수 있게 한다. 사용자가 직접 펼치거나
+  // 접은 행만 이 기본값과 반대로 뒤집는다(toggle).
+  const [toggledResultKeys, setToggledResultKeys] = useState<Set<string>>(new Set());
+  // 행이 많아지면 하나씩 펼치는 건 비효율적이라는 게 UX팀 지적이었다. "모두 펼치기/접기"는
+  // 토글 모드가 아니라 그 순간 화면에 보이는 행들을 일괄 뒤집는 1회성 동작이라, 이후 사용자가
+  // 개별 행을 다시 누르면 정상적으로 개별 토글된다(= allResultKeys와 비교해 반전).
+  const [allResultsExpanded, setAllResultsExpanded] = useState(false);
+  const toggleResultExpanded = (key: string) => {
+    setToggledResultKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  // 기획팀 요구사항: 담당자가 리드를 우선순위대로(수량 큰 순) 훑어볼 수 있어야 한다.
+  const [sortByQuantityDesc, setSortByQuantityDesc] = useState(false);
+  const parseQuantityValue = (raw?: string | null): number => {
+    if (!raw) return -Infinity;
+    const match = raw.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
+    return match ? parseFloat(match[0]) : -Infinity;
+  };
 
   const loadHistory = async () => {
     setHistoryLoading(true);
@@ -124,10 +151,32 @@ export default function Home() {
   const isRunning = statusData?.status === 'running' || statusData?.status === 'queued';
   const isCompleted = statusData?.status === 'completed' || statusData?.status === 'completed_with_errors';
   const keywordResults = statusData?.searchResults?.filter((result) => result.keywordFound) ?? [];
-  const filteredResults = (statusData?.searchResults ?? []).filter(result =>
+  const filteredResultsUnsorted = (statusData?.searchResults ?? []).filter(result =>
     resultFilter === "ALL" || result.resultStatus === resultFilter
   );
+  const filteredResults = sortByQuantityDesc
+    ? [...filteredResultsUnsorted].sort((a, b) => parseQuantityValue(b.itemQuantity) - parseQuantityValue(a.itemQuantity))
+    : filteredResultsUnsorted;
   const hasResults = filteredResults.length > 0;
+  const expandAllResults = () => {
+    // defaultOpen 규칙(키워드 발견 행만 기본 펼침)과 반대로 만들어야 "펼치기"가 되므로,
+    // 아직 펼쳐지지 않은(=default가 false인) 행의 key만 toggled set에 추가한다.
+    // idx는 반드시 필터링 전 filteredResults 배열 기준이어야 실제 행 렌더링 시 key와 일치한다.
+    const next = new Set<string>();
+    filteredResults.forEach((res, idx) => {
+      if (res.resultStatus !== 'keyword_found') next.add(`${res.noticeNumber}-${res.fileName}-${idx}`);
+    });
+    setToggledResultKeys(next);
+    setAllResultsExpanded(true);
+  };
+  const collapseAllResults = () => {
+    const next = new Set<string>();
+    filteredResults.forEach((res, idx) => {
+      if (res.resultStatus === 'keyword_found') next.add(`${res.noticeNumber}-${res.fileName}-${idx}`);
+    });
+    setToggledResultKeys(next);
+    setAllResultsExpanded(false);
+  };
   const parseFailureResults = statusData?.searchResults?.filter((result) => result.resultStatus === 'parse_failed') ?? [];
   const keywordNotices = [...new Set(keywordResults.map((result) => result.noticeNumber))];
 
@@ -298,6 +347,17 @@ export default function Home() {
       default:
         return <Badge variant="outline" className="text-muted-foreground gap-1"><Clock className="w-3 h-3" />대기</Badge>;
     }
+  };
+
+  // "진행중" 배지만 봐서는 지금 다운로드 중인지 검색 중인지 알 수 없다는
+  // 피드백이 있어, 갖고 있는 카운트만으로 대략적인 진행 단계를 추정해 보여준다.
+  const getNoticeStageHint = (notice: { status: string; attachmentCount: number; downloadedCount: number }) => {
+    if (notice.status !== 'running') return null;
+    if (notice.attachmentCount === 0) return '첨부파일 확인 중';
+    if (notice.downloadedCount < notice.attachmentCount) {
+      return `첨부파일 다운로드 중 (${notice.downloadedCount}/${notice.attachmentCount})`;
+    }
+    return '키워드 검색 중';
   };
 
   const getResultStatusBadge = (status: string) => {
@@ -744,9 +804,17 @@ export default function Home() {
           </Card>
         )}
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
+        {/*
+          이 두 카드는 원래 화면을 반으로 나눠 나란히 배치했었는데, 그러면
+          "미리보기" 표가 실제 열(현장명/수량/낙찰자)을 나눌 폭이 나오지 않아
+          모든 정보를 한 셀에 욱여넣을 수밖에 없었다. "공고별 처리 상태"는
+          진행 상황을 훑어보는 모니터링용이라 낮은 높이로도 충분하지만,
+          "미리보기"는 실제 영업 판단이 이뤄지는 화면이라 전체 폭이 필요하다고
+          판단해 세로로 쌓는 구조로 바꿨다.
+        */}
+        <div className="flex flex-col gap-6">
           {/* Notice List */}
-          <Card id="result-preview" ref={resultPreviewRef} className="scroll-mt-28 border-border shadow-sm flex flex-col h-[700px]">
+          <Card id="result-preview" ref={resultPreviewRef} className="scroll-mt-28 border-border shadow-sm flex flex-col h-[420px]">
             <CardHeader className="pb-4 shrink-0">
               <CardTitle className="text-lg">공고별 처리 상태</CardTitle>
               <CardDescription>
@@ -773,9 +841,14 @@ export default function Home() {
                       <TableCell className="font-mono text-xs font-medium text-slate-700 dark:text-slate-300">
                         {notice.noticeNumber}
                       </TableCell>
-                      <TableCell className="max-w-[200px] truncate" title={notice.noticeName || '정보 없음'}>
+                      <TableCell className="max-w-[200px] truncate">
                         {notice.noticeName ? (
-                          <span className="text-sm">{notice.noticeName}</span>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="text-sm cursor-default">{notice.noticeName}</span>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs">{notice.noticeName}</TooltipContent>
+                          </Tooltip>
                         ) : (
                           <span className="text-muted-foreground text-xs italic">대기중...</span>
                         )}
@@ -785,28 +858,54 @@ export default function Home() {
                           </div>
                         )}
                         {notice.attachments.length > 0 && (
-                          <details className="mt-2 text-xs">
-                            <summary className="cursor-pointer text-primary">
-                              첨부파일 {notice.attachments.length}개 보기
-                            </summary>
-                            <ul className="mt-2 space-y-1.5">
-                              {notice.attachments.map((attachment, attachmentIndex) => (
-                                <li key={`${attachment.fileName}-${attachmentIndex}`} className="border-l-2 pl-2">
-                                  <div className="break-all">{attachment.fileName}</div>
-                                  <div className="text-muted-foreground">
-                                    {attachment.priority ? '우선검사 · ' : ''}
-                                    다운로드 {attachment.downloadStatus === 'success' ? '성공' : attachment.downloadStatus === 'failed' ? '실패' : '대기'} ·
-                                    {' '}시도 {attachment.attempts}회 · 파싱 {attachment.parsedFileCount}개
-                                    {attachment.parseFailureCount > 0 ? ` · 파싱실패 ${attachment.parseFailureCount}개` : ''}
-                                  </div>
-                                </li>
-                              ))}
-                            </ul>
-                          </details>
+                          <Accordion type="single" collapsible className="mt-1.5">
+                            <AccordionItem value="attachments" className="border-none">
+                              <AccordionTrigger className="py-1 text-xs font-normal text-primary hover:no-underline [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:text-primary">
+                                첨부파일 {notice.attachments.length}개
+                              </AccordionTrigger>
+                              <AccordionContent className="pb-1 pt-0.5">
+                                <ul className="space-y-2">
+                                  {notice.attachments.map((attachment, attachmentIndex) => {
+                                    const downloadOk = attachment.downloadStatus === 'success';
+                                    const downloadFailed = attachment.downloadStatus === 'failed';
+                                    return (
+                                      <li
+                                        key={`${attachment.fileName}-${attachmentIndex}`}
+                                        className="flex items-start gap-1.5 border-l-2 border-border pl-2 text-xs"
+                                      >
+                                        {downloadOk ? (
+                                          <FileCheck2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                                        ) : downloadFailed ? (
+                                          <FileWarning className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
+                                        ) : (
+                                          <FileClock className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                                        )}
+                                        <div className="min-w-0">
+                                          <div className="break-all">{attachment.fileName}</div>
+                                          <div className="text-muted-foreground mt-0.5">
+                                            {attachment.priority && <span className="text-primary">우선검사 · </span>}
+                                            시도 {attachment.attempts}회 · 파싱 {attachment.parsedFileCount}개
+                                            {attachment.parseFailureCount > 0 && (
+                                              <span className="text-amber-700"> · 파싱실패 {attachment.parseFailureCount}개</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </AccordionContent>
+                            </AccordionItem>
+                          </Accordion>
                         )}
                       </TableCell>
                       <TableCell className="text-center">
                         {getNoticeStatusBadge(notice.status)}
+                        {getNoticeStageHint(notice) && (
+                          <div className="mt-1 text-[10px] leading-tight text-muted-foreground">
+                            {getNoticeStageHint(notice)}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell className="text-center text-xs">
                         {notice.awardStatus === 'confirmed' ? (
@@ -858,14 +957,36 @@ export default function Home() {
 
           {/* Results Tab / Section */}
           <Card className="border-border shadow-sm flex flex-col h-[700px]">
-            <CardHeader className="pb-4 shrink-0 flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="text-lg">엑셀 결과 웹 미리보기</CardTitle>
-                <CardDescription>
-                  XLSX와 동일한 전체 상태 및 발견 문맥을 브라우저에서 바로 확인합니다.
-                </CardDescription>
+            {/*
+              1차 리뷰에서 컨트롤 한 줄에 다 몰아넣었더니 좁은 화면에서 줄바꿈이
+              지저분하다는 지적이 있었다. 제목/건수는 위, 실제 조작(필터·정렬·펼침)은
+              아래 줄로 분리해 각 줄의 역할을 명확히 했다.
+            */}
+            <CardHeader className="pb-3 shrink-0 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg">엑셀 결과 웹 미리보기</CardTitle>
+                  <CardDescription>
+                    XLSX와 동일한 전체 상태 및 발견 문맥을 브라우저에서 바로 확인합니다.
+                  </CardDescription>
+                </div>
+                {hasResults && (
+                  <Badge variant="secondary" className="font-medium bg-primary/10 text-primary hover:bg-primary/20">
+                    {filteredResults.length}건
+                  </Badge>
+                )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="found-only-switch"
+                    checked={resultFilter === "keyword_found"}
+                    onCheckedChange={checked => setResultFilter(checked ? "keyword_found" : "ALL")}
+                  />
+                  <Label htmlFor="found-only-switch" className="text-xs font-medium text-muted-foreground cursor-pointer">
+                    발견된 결과만 보기
+                  </Label>
+                </div>
                 <select
                   className="h-8 rounded-md border bg-background px-2 text-xs"
                   value={resultFilter}
@@ -879,11 +1000,25 @@ export default function Home() {
                   <option value="parse_failed">PARSE_FAIL</option>
                   <option value="not_awarded">NOT_AWARDED</option>
                 </select>
-                {hasResults && (
-                  <Badge variant="secondary" className="font-medium bg-primary/10 text-primary hover:bg-primary/20">
-                    {filteredResults.length}건
-                  </Badge>
-                )}
+                <Button
+                  variant={sortByQuantityDesc ? "secondary" : "outline"}
+                  size="sm"
+                  className="h-8 gap-1.5 px-2 text-xs"
+                  onClick={() => setSortByQuantityDesc(prev => !prev)}
+                >
+                  <ArrowUpDown className="w-3.5 h-3.5" />
+                  수량 많은 순
+                </Button>
+                <div className="flex items-center gap-1 ml-auto">
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2 text-xs" onClick={expandAllResults}>
+                    <ChevronsDown className="w-3.5 h-3.5" />
+                    모두 펼치기
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2 text-xs" onClick={collapseAllResults}>
+                    <ChevronsUp className="w-3.5 h-3.5" />
+                    모두 접기
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="p-0 overflow-auto flex-1">
@@ -904,94 +1039,194 @@ export default function Home() {
                   <TableHeader className="bg-muted/50 sticky top-0 z-10 shadow-[0_1px_0_0_hsl(var(--border))]">
                     <TableRow>
                       <TableHead className="w-[120px]">공고번호</TableHead>
-                      <TableHead className="w-[110px]">판정</TableHead>
-                      <TableHead className="w-[160px]">문서/위치</TableHead>
-                      <TableHead>발견 문맥</TableHead>
+                      <TableHead className="w-[100px]">판정</TableHead>
+                      <TableHead>현장명</TableHead>
+                      <TableHead className="w-[140px]">
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 hover:text-foreground"
+                          onClick={() => setSortByQuantityDesc(prev => !prev)}
+                        >
+                          수량
+                          <ArrowUpDown className={`w-3 h-3 ${sortByQuantityDesc ? 'text-primary' : 'text-muted-foreground'}`} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[200px]">낙찰자 · 연락처</TableHead>
+                      <TableHead className="w-[80px] text-center">상세</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredResults.map((res, idx) => (
-                      <TableRow key={`result-${idx}`}>
-                        <TableCell className="font-mono text-xs font-medium text-slate-700 dark:text-slate-300 align-top pt-4">
-                          {res.noticeNumber}
-                        </TableCell>
-                        <TableCell className="align-top pt-4">
-                          {getResultStatusBadge(res.resultStatus)}
-                          {res.retryCount > 0 && (
-                            <div className="text-[10px] text-muted-foreground mt-1">재시도 {res.retryCount}회</div>
+                    {filteredResults.map((res, idx) => {
+                      const key = `${res.noticeNumber}-${res.fileName}-${idx}`;
+                      // 실제로 키워드가 발견된 행만 기본으로 펼쳐서 바로 보이게 하고,
+                      // 나머지는 접어서 여러 건을 한 화면에서 스캔할 수 있게 한다.
+                      const defaultOpen = res.resultStatus === 'keyword_found';
+                      const isOpen = toggledResultKeys.has(key) ? !defaultOpen : defaultOpen;
+                      const text = res.originalText || res.surroundingText || '';
+                      const keywords = res.foundKeywords;
+                      const highlightedText = (() => {
+                        if (!keywords || keywords.length === 0) return <span>{text}</span>;
+                        const escapedKeywords = keywords.map(kw => kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+                        const regex = new RegExp(`(${escapedKeywords.join('|')})`, 'gi');
+                        const parts = text.split(regex);
+                        return parts.map((part, i) =>
+                          keywords.some(kw => kw.toLowerCase() === part.toLowerCase()) ? (
+                            <mark key={i} className="bg-yellow-200 text-yellow-900 font-bold px-1 rounded-sm">{part}</mark>
+                          ) : (
+                            <span key={i}>{part}</span>
+                          ),
+                        );
+                      })();
+                      const rowTint = res.resultStatus === 'keyword_found' ? 'bg-emerald-50/30 dark:bg-emerald-950/10' : undefined;
+
+                      return (
+                        <Fragment key={key}>
+                          <TableRow className={rowTint}>
+                            <TableCell className="font-mono text-xs font-medium text-slate-700 dark:text-slate-300 align-top pt-4">
+                              {res.noticeNumber}
+                            </TableCell>
+                            <TableCell className="align-top pt-4">
+                              {getResultStatusBadge(res.resultStatus)}
+                              {res.retryCount > 0 && (
+                                <div className="text-[10px] text-muted-foreground mt-1">재시도 {res.retryCount}회</div>
+                              )}
+                            </TableCell>
+                            <TableCell className="align-top py-3">
+                              <div className="space-y-1 text-xs">
+                                <div className="flex items-center gap-1.5 font-medium text-foreground">
+                                  <Building2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                  <span className="truncate max-w-[280px]" title={res.noticeName ?? undefined}>
+                                    {res.noticeName ?? '공사명 미확인'}
+                                  </span>
+                                </div>
+                                {!isOpen && text && (
+                                  <div className="text-muted-foreground line-clamp-1 pt-0.5" title={text}>
+                                    {text}
+                                  </div>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="align-top py-3">
+                              {res.itemQuantity ? (
+                                <div className="flex items-center gap-1.5 text-xs">
+                                  <Package className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                  <span className="font-semibold text-primary">
+                                    {res.itemQuantity}{res.itemUnit ? ` ${res.itemUnit}` : ''}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">-</span>
+                              )}
+                              {res.itemName && (
+                                <div className="text-[11px] text-muted-foreground truncate max-w-[130px]">{res.itemName}</div>
+                              )}
+                            </TableCell>
+                            <TableCell className="align-top py-3">
+                              <div className="flex items-center gap-1.5 text-xs">
+                                <Phone className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                <span className="font-semibold">{res.bidderName ?? '낙찰자 미확인'}</span>
+                              </div>
+                              {res.bidderPhone && (
+                                <div className="text-[11px] text-muted-foreground pl-5">{res.bidderPhone}</div>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-center align-top pt-2.5">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 gap-1 px-2 text-xs"
+                                onClick={() => toggleResultExpanded(key)}
+                              >
+                                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                                {isOpen ? '접기' : '자세히'}
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                          {isOpen && (
+                            <TableRow className={rowTint}>
+                              <TableCell colSpan={6} className="pt-0 pb-4">
+                                <div className="rounded-md border border-border bg-muted/20 p-3 space-y-3">
+                                  <div>
+                                    <div className="text-[11px] font-medium text-muted-foreground mb-1">문서 위치</div>
+                                    <div className="text-xs font-medium break-all">{res.fileName}</div>
+                                    <div className="text-[11px] text-muted-foreground mt-0.5 flex flex-wrap gap-x-3">
+                                      {res.sheet && <span>{res.sheet}</span>}
+                                      {res.page && <span>{res.page}p</span>}
+                                      {res.location && <span title={res.location}>{res.location}</span>}
+                                    </div>
+                                    {res.downloadError && (
+                                      <div className="text-[11px] text-destructive mt-1">{res.downloadError}</div>
+                                    )}
+                                    {res.parseError && (
+                                      <div className="text-[11px] text-amber-700 mt-1">{res.parseError}</div>
+                                    )}
+                                  </div>
+
+                                  <div>
+                                    <div className="text-[11px] font-medium text-muted-foreground mb-1">발견 문맥</div>
+                                    <div className="text-xs bg-background p-3 rounded-md border border-border font-mono whitespace-pre-wrap leading-relaxed max-h-[200px] overflow-y-auto">
+                                      {highlightedText}
+                                    </div>
+                                  </div>
+
+                                  <div className="grid sm:grid-cols-3 gap-3 text-[11px]">
+                                    <div>
+                                      <div className="font-medium text-muted-foreground mb-1">품목 정보</div>
+                                      <div className="space-y-0.5">
+                                        <div><span className="text-muted-foreground">규격</span> {res.itemSpecification ?? '미공개/확인불가'}</div>
+                                        <div><span className="text-muted-foreground">품명</span> {res.itemName ?? '미공개/확인불가'}</div>
+                                        <div><span className="text-muted-foreground">수량</span> {res.itemQuantity ?? '미공개/확인불가'}</div>
+                                        <div><span className="text-muted-foreground">단위</span> {res.itemUnit ?? '미공개/확인불가'}</div>
+                                        <div><span className="text-muted-foreground">품목금액</span> {res.itemAmount ?? '미공개/확인불가'}</div>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="font-medium text-muted-foreground mb-1">낙찰 정보 (영업 대상)</div>
+                                      <div className="space-y-0.5">
+                                        <div><span className="text-muted-foreground">낙찰자</span> <span className="font-semibold">{res.bidderName ?? '미공개/확인불가'}</span></div>
+                                        <div><span className="text-muted-foreground">낙찰 식별번호</span> {res.awardIdentifier ?? '미공개/확인불가'}</div>
+                                        <div><span className="text-muted-foreground">낙찰일</span> {res.awardDate ?? '미공개/확인불가'}</div>
+                                        <div><span className="text-muted-foreground">낙찰금액</span> {res.awardAmount ?? '미공개/확인불가'}</div>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="font-medium text-muted-foreground mb-1">공사/연락처 정보</div>
+                                      <div className="space-y-0.5">
+                                        <div><span className="text-muted-foreground">공사금액</span> 예산 {res.budgetAmount ?? '-'} / 추정 {res.estimatedAmount ?? '-'} / 기초 {res.baseAmount ?? '-'}</div>
+                                        <div><span className="text-muted-foreground">공사개요</span> {res.constructionOverview ?? '미공개/확인불가'}</div>
+                                        <div className="flex items-start gap-1">
+                                          <MapPin className="w-3 h-3 mt-0.5 shrink-0 text-muted-foreground" />
+                                          {res.bidderAddress ?? '미공개/확인불가'}
+                                        </div>
+                                        <div><span className="text-muted-foreground">연락처</span> {res.bidderPhone ?? '미공개/확인불가'}</div>
+                                        <div>
+                                          <span className="text-muted-foreground">연락처 출처</span>{' '}
+                                          {res.contactSource === 'government' && '나라장터 낙찰정보'}
+                                          {res.contactSource === 'attachment' && '첨부파일에서 추출'}
+                                          {res.contactSource === 'portal' && '포털 검색 보완'}
+                                          {!res.contactSource && (res.bidderPhone && res.bidderPhone !== '미공개/확인불가' ? '확인됨' : '미확인')}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {jobId && res.downloadStatus === 'success' && res.fileName && res.fileName !== '-' && (
+                                    <a
+                                      href={`/api/bids/jobs/${jobId}/file?notice=${encodeURIComponent(res.noticeNumber)}&path=${encodeURIComponent(res.fileName)}`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/10"
+                                    >
+                                      <FolderOpen className="h-3 w-3" /> 원본 파일 직접 열어서 검수하기
+                                    </a>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
                           )}
-                        </TableCell>
-                        <TableCell className="align-top pt-4">
-                          <div className="text-xs font-medium max-w-[150px] truncate" title={res.fileName}>
-                            {res.fileName}
-                          </div>
-                          <div className="text-[10px] text-muted-foreground mt-1 space-y-0.5">
-                            {res.sheet && <div>{res.sheet}</div>}
-                            {res.page && <div>{res.page}p</div>}
-                            {res.location && <div className="truncate" title={res.location}>{res.location}</div>}
-                          </div>
-                          {res.downloadError && (
-                            <div className="text-[10px] text-destructive mt-1">{res.downloadError}</div>
-                          )}
-                          {res.parseError && (
-                            <div className="text-[10px] text-amber-700 mt-1">{res.parseError}</div>
-                          )}
-                        </TableCell>
-                        <TableCell className="py-3 pr-4">
-                          <div className="text-xs bg-muted/40 p-3 rounded-md border border-border font-mono whitespace-pre-wrap leading-relaxed max-h-[200px] overflow-y-auto">
-                            {(() => {
-                              const text = res.originalText || res.surroundingText;
-                              const keywords = res.foundKeywords;
-                              if (!keywords || keywords.length === 0) return <span>{text}</span>;
-                              
-                              const escapedKeywords = keywords.map(kw => kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-                              const regex = new RegExp(`(${escapedKeywords.join('|')})`, 'gi');
-                              const parts = text.split(regex);
-                              
-                              return parts.map((part, i) => {
-                                if (keywords.some(kw => kw.toLowerCase() === part.toLowerCase())) {
-                                  return <mark key={i} className="bg-yellow-200 text-yellow-900 font-bold px-1 rounded-sm">{part}</mark>;
-                                }
-                                return <span key={i}>{part}</span>;
-                              });
-                            })()}
-                          </div>
-                          <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-                            <span className="text-muted-foreground">공사명</span><span>{res.noticeName ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">규격</span><span>{res.itemSpecification ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">품명</span><span>{res.itemName ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">수량</span><span>{res.itemQuantity ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">단위</span><span>{res.itemUnit ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">품목금액</span><span>{res.itemAmount ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground font-semibold">낙찰자(영업 대상)</span><span className="font-semibold">{res.bidderName ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">낙찰 식별번호</span><span>{res.awardIdentifier ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">낙찰일</span><span>{res.awardDate ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">낙찰금액</span><span>{res.awardAmount ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">공사금액</span><span>예산 {res.budgetAmount ?? '-'} / 추정 {res.estimatedAmount ?? '-'} / 기초 {res.baseAmount ?? '-'}</span>
-                            <span className="text-muted-foreground">공사개요</span><span>{res.constructionOverview ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">주소</span><span>{res.bidderAddress ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">연락처</span><span>{res.bidderPhone ?? '미공개/확인불가'}</span>
-                            <span className="text-muted-foreground">연락처 출처</span>
-                            <span>
-                              {res.contactSource === 'government' && '나라장터 낙찰정보'}
-                              {res.contactSource === 'attachment' && '첨부파일에서 추출'}
-                              {res.contactSource === 'portal' && '포털 검색 보완'}
-                              {!res.contactSource && (res.bidderPhone && res.bidderPhone !== '미공개/확인불가' ? '확인됨' : '미확인')}
-                            </span>
-                          </div>
-                          {jobId && res.downloadStatus === 'success' && res.fileName && res.fileName !== '-' && (
-                            <a
-                              href={`/api/bids/jobs/${jobId}/file?notice=${encodeURIComponent(res.noticeNumber)}&path=${encodeURIComponent(res.fileName)}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/10"
-                            >
-                              <FolderOpen className="h-3 w-3" /> 원본 파일 직접 열어서 검수하기
-                            </a>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                        </Fragment>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}
