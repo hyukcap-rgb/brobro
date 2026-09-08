@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { GetScanParams, ListScansQueryParams } from "@workspace/api-zod";
+import { GetScanParams, ListScansQueryParams, TriggerScanBody } from "@workspace/api-zod";
 import { getScanRun, listScanRuns } from "../lib/matches-store";
 import { createPendingScanRun, executeScanRun } from "../lib/daily-scan";
 import { logger } from "../lib/logger";
@@ -37,9 +37,16 @@ router.get("/scans/:id", async (req, res) => {
 
 // 즉시 실행 요청은 실행 기록만 만들어 바로 202로 응답하고, 실제 스캔(첨부파일 다운로드/
 // 파싱 포함, 수 분 소요 가능)은 백그라운드에서 진행한다. 진행 상황은 /scans 폴링으로 확인.
-router.post("/scans/run", async (_req, res) => {
+// body.date(YYYY-MM-DD)를 지정하면 그 날짜만 정확히 재검색하고, 생략하면 기존
+// 자동 로직(전일 기준 + 미완료 구간 자동 보충)을 그대로 사용한다.
+router.post("/scans/run", async (req, res) => {
+  const input = TriggerScanBody.safeParse(req.body ?? {});
+  if (!input.success) {
+    res.status(400).json({ error: "날짜 형식을 확인해 주세요 (YYYY-MM-DD)." });
+    return;
+  }
   try {
-    const run = await createPendingScanRun("manual");
+    const run = await createPendingScanRun("manual", input.data.date);
     void executeScanRun(run).catch((error) => {
       logger.error({ err: error, runId: run.id }, "Manual scan run failed");
     });
