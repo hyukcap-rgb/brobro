@@ -1,7 +1,7 @@
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { copyFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db, dailyScanRunsTable, awardedMatchesTable, type DailyScanRun } from "@workspace/db";
 import {
   requestBuffer,
@@ -24,6 +24,11 @@ import { getAppSettings } from "./settings";
 import { kstToday, shiftKstDate, isKoreanHoliday, type KstDate } from "./kr-holidays";
 import { SCAN_ROOT } from "./scan-storage";
 import { logger } from "./logger";
+
+// 하루 API 장애 등으로 여러 날이 한꺼번에 누락된 경우, 한 번의 실행에서 최대
+// 이만큼만 소급 채운다(끝없이 과거로 폭주하는 것을 막는 안전장치). 이보다 긴
+// 공백은 매일 조금씩 나눠서 채워지고, 로그에 경고를 남긴다.
+const MAX_GAP_FILL_DAYS = 14;
 
 // 업무구분(사업 종류)별 나라장터 OpenAPI 엔드포인트. 조달청이 물품(Thng)/
 // 용역(Servc)/공사(Cnstwk)를 각각 별도 오퍼레이션으로 제공하기 때문에, 사용자가
@@ -81,6 +86,86 @@ export function computeTargetDates(instant: Date = new Date()): KstDate[] {
     return [yesterday, dayBeforeYesterday];
   }
   return [yesterday];
+}
+
+function kstDateFromKey(key: string): KstDate {
+  const [year, month, day] = key.split("-").map(Number);
+  // weekday는 placeholder(0)로 넣어두고 shiftKstDate(0일 이동)를 한 번 거쳐
+  // Intl.DateTimeFormat으로 정확한 요일을 다시 계산한다 — executeScanRun에서
+  // 저장된 targetDates 문자열을 KstDate로 복원할 때 쓰는 것과 같은 패턴.
+  const placeholder: KstDate = { key, compact: key.replaceAll("-", ""), year, month, day, weekday: 0 };
+  return shiftKstDate(placeholder, 0);
+}
+
+// 완료된(status="completed") 스캔들의 targetDates 중 가장 최근 날짜(문자열
+// "YYYY-MM-DD"는 사전식 정렬 = 날짜순 정렬이 그대로 성립)를 찾는다. 갭필로
+// 인해 나중 실행이 더 과거 날짜를 대상으로 할 수도 있어(예: 장애 복구 후 밀린
+// 날짜를 뒤늦게 채우는 경우) startedAt 순서와 targetDates 순서가 항상 같지는
+// 않으므로, 최근 실행 여러 건을 모아 그 안에서 최대값을 구한다.
+async function getMostRecentCoveredDateKey(): Promise<string | null> {
+  const recentCompleted = await db
+    .select({ targetDates: dailyScanRunsTable.targetDates })
+    .from(dailyScanRunsTable)
+    .where(eq(dailyScanRunsTable.status, "completed"))
+    .orderBy(desc(dailyScanRunsTable.startedAt))
+    .limit(30);
+  let maxKey: string | null = null;
+  for (const row of recentCompleted) {
+    for (const key of row.targetDates) {
+      if (!maxKey || key > maxKey) maxKey = key;
+    }
+  }
+  return maxKey;
+}
+
+// 요구사항(납품 신뢰성): computeTargetDates()는 항상 "지금 기준 어제"만 바라보기
+// 때문에, apis.data.go.kr 장애 등으로 특정 날짜의 스캔이 통째로 실패하면 그
+// 날짜의 낙찰 데이터는 이후 어떤 실행에서도 다시 확인되지 않고 영구적으로
+// 누락된다 — 이는 납품물의 정확성을 보장할 수 없는 구조적 결함이었다.
+//
+// 이를 막기 위해, 매 실행마다 "완료로 기록된 가장 최근 날짜" 이후부터 어제까지
+// 빠짐없이 훑어 대상 날짜에 포함시킨다(정상적인 하루 1건 운영 시에는 결과가
+// computeTargetDates()와 동일 — 즉, 기존 동작을 바꾸지 않으면서 장애 이후에는
+// 자동으로 밀린 날짜를 채워 넣는다).
+export async function computeTargetDatesWithGapFill(instant: Date = new Date()): Promise<KstDate[]> {
+  const today = kstToday(instant);
+  const yesterday = shiftKstDate(today, -1);
+  const lastCoveredKey = await getMostRecentCoveredDateKey();
+
+  if (!lastCoveredKey) {
+    // 완료된 실행 기록이 아직 없다(최초 실행). 기존 로직 그대로.
+    return computeTargetDates(instant);
+  }
+
+  const lastCovered = kstDateFromKey(lastCoveredKey);
+  if (lastCovered.key >= yesterday.key) {
+    // 이미 어제까지(혹은 수동 재실행 등으로 그 이후까지) 커버되어 있다 — 손실
+    // 구간 없음. 기존 로직(월요일/공휴일 다음날 이중 확인 포함) 그대로 수행한다.
+    return computeTargetDates(instant);
+  }
+
+  // lastCovered 다음날부터 어제까지 공백을 전부 채운다.
+  const dates: KstDate[] = [];
+  let cursor = shiftKstDate(lastCovered, 1);
+  while (cursor.key <= yesterday.key && dates.length < MAX_GAP_FILL_DAYS) {
+    dates.push(cursor);
+    cursor = shiftKstDate(cursor, 1);
+  }
+
+  if (dates.length > 1) {
+    logger.warn(
+      { lastCoveredKey, dates: dates.map((d) => d.key) },
+      "일별 스캔: 이전 공백(스캔 실패/미실행) 감지, 밀린 날짜를 함께 검색합니다.",
+    );
+  }
+  if (cursor.key <= yesterday.key) {
+    logger.warn(
+      { lastCoveredKey, yesterday: yesterday.key, filledThrough: dates.at(-1)?.key, maxGapFillDays: MAX_GAP_FILL_DAYS },
+      "일별 스캔: 공백이 너무 길어 이번 실행에서 다 채우지 못했습니다. 다음 실행에서 이어서 채웁니다.",
+    );
+  }
+
+  return dates;
 }
 
 async function fetchAwardsForDate(date: KstDate, source: WorkSource): Promise<Record<string, unknown>[]> {
@@ -236,7 +321,7 @@ export async function recoverOrphanedScanRuns(): Promise<number> {
 // 스캔 실행 기록만 즉시 만들어 반환한다 (수동 트리거 API가 바로 202로 응답할 수
 // 있도록). 실제 스캔은 executeScanRun에서 진행되며 몇 분씩 걸릴 수 있다.
 export async function createPendingScanRun(triggerType: "schedule" | "manual"): Promise<DailyScanRun> {
-  const targetDates = computeTargetDates();
+  const targetDates = await computeTargetDatesWithGapFill();
   const [run] = await db
     .insert(dailyScanRunsTable)
     .values({ targetDates: targetDates.map((d) => d.key), status: "running", triggerType })
