@@ -212,6 +212,27 @@ async function resolveBidderContact(
   return { address, phone, contactSource };
 }
 
+// 서버가 재시작/재배포되면 그 순간 진행 중이던 스캔은 메모리와 함께 그대로
+// 사라지지만, DB에는 status="running" 행이 영원히 남아 화면에 "진행중"으로
+// 표시된다. 새 프로세스가 뜬 시점에 "running"으로 남아있는 행은 전부 이전
+// 프로세스가 죽으면서 고아가 된 것이므로(현재 프로세스는 아직 아무 스캔도
+// 시작하지 않았다), 서버 시작 직후 한 번 실패 처리해 정리한다.
+export async function recoverOrphanedScanRuns(): Promise<number> {
+  const orphaned = await db
+    .update(dailyScanRunsTable)
+    .set({
+      status: "failed",
+      errorMessage: "서버 재시작으로 스캔이 중단되었습니다.",
+      finishedAt: new Date(),
+    })
+    .where(eq(dailyScanRunsTable.status, "running"))
+    .returning({ id: dailyScanRunsTable.id });
+  if (orphaned.length > 0) {
+    logger.warn({ count: orphaned.length, ids: orphaned.map((r) => r.id) }, "서버 시작: 중단된 이전 스캔 기록 정리");
+  }
+  return orphaned.length;
+}
+
 // 스캔 실행 기록만 즉시 만들어 반환한다 (수동 트리거 API가 바로 202로 응답할 수
 // 있도록). 실제 스캔은 executeScanRun에서 진행되며 몇 분씩 걸릴 수 있다.
 export async function createPendingScanRun(triggerType: "schedule" | "manual"): Promise<DailyScanRun> {
