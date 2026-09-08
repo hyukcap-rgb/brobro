@@ -440,6 +440,23 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           }
         }
 
+        // 원인 진단용 임시 로그: "추정가격 미공개라서 예산(낙찰금액) 기준으로만
+        // 통과한 건"과 "추정가격이 실제로 존재하는 건"을 구분하기 위해 원본 금액
+        // 필드를 그대로 남긴다. (사용자가 나라장터 원본 사이트의 "추정가격≥N"
+        // 필터 결과와 우리 시스템의 후보 수가 다르다고 지적한 것을 검증하기 위함)
+        logger.info(
+          {
+            noticeNumber,
+            bidNtceNm: detail.bidNtceNm,
+            bdgtAmt: detail.bdgtAmt,
+            sucsfbidAmt: award.sucsfbidAmt,
+            presmptPrce: detail.presmptPrce,
+            budgetAmount,
+            estimatedAmount,
+          },
+          "일별 스캔[진단]: 금액 필드 원본값",
+        );
+
         // 요구사항 1: 업무구분(공종) 필터 — 공사 카테고리에만 의미가 있다(주공종명/
         // 부공종명은 Cnstwk 응답에만 존재).
         const { matched: workTypeMatched, workTypeName } =
