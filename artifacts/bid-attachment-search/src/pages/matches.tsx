@@ -11,10 +11,26 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Input } from "@/components/ui/input";
 import {
   Download, FileDown, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
-  MapPin, Phone,
+  MapPin, Phone, CalendarSearch,
 } from "lucide-react";
+
+// KST(Asia/Seoul) 기준 "어제" 날짜를 YYYY-MM-DD로 반환한다. 서버의 자동 검색과
+// 동일한 기준일을 날짜 입력의 기본값으로 보여주기 위함 — 브라우저 로컬 시간대와
+// 무관하게 항상 KST로 계산한다.
+function getKstYesterdayKey(): string {
+  const now = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${lookup.year}-${lookup.month}-${lookup.day}`;
+}
 
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return "-";
@@ -66,6 +82,7 @@ function scanStatusBadge(status: string) {
 export default function Matches() {
   const queryClient = useQueryClient();
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>(() => getKstYesterdayKey());
   const matchesQuery = useListMatches(
     { limit: 500 },
     { query: { queryKey: getListMatchesQueryKey({ limit: 500 }), refetchInterval: 30_000 } },
@@ -79,16 +96,25 @@ export default function Matches() {
   const matches = matchesQuery.data?.matches ?? [];
   const scans = scansQuery.data?.scans ?? [];
 
-  const handleRunNow = () => {
-    triggerScan.mutate(undefined, {
-      onSuccess: () => {
-        void queryClient.invalidateQueries({ queryKey: getListScansQueryKey({ limit: 20 }) });
-        setTimeout(() => {
-          void queryClient.invalidateQueries({ queryKey: getListMatchesQueryKey({ limit: 500 }) });
+  const runScan = (date?: string) => {
+    triggerScan.mutate(
+      { data: date ? { date } : {} },
+      {
+        onSuccess: () => {
           void queryClient.invalidateQueries({ queryKey: getListScansQueryKey({ limit: 20 }) });
-        }, 20_000);
+          setTimeout(() => {
+            void queryClient.invalidateQueries({ queryKey: getListMatchesQueryKey({ limit: 500 }) });
+            void queryClient.invalidateQueries({ queryKey: getListScansQueryKey({ limit: 20 }) });
+          }, 20_000);
+        },
       },
-    });
+    );
+  };
+
+  const handleRunNow = () => runScan();
+  const handleRunForDate = () => {
+    if (!selectedDate) return;
+    runScan(selectedDate);
   };
 
   const handleDownload = async (url: string, fileName: string) => {
@@ -191,15 +217,36 @@ export default function Matches() {
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
+        <CardHeader className="flex flex-row items-start justify-between gap-4 flex-wrap">
           <div>
             <CardTitle>자동 검색 실행 기록</CardTitle>
-            <CardDescription>매일 오전 7시(KST) 자동 실행되며, 필요하면 지금 바로 실행할 수 있습니다.</CardDescription>
+            <CardDescription>
+              매일 오전 7시(KST) 자동으로 전일 공고를 검색합니다. 필요하면 지금 바로 실행하거나, 원하는 날짜를
+              직접 골라 다시 검색해볼 수 있습니다.
+            </CardDescription>
           </div>
-          <Button size="sm" onClick={handleRunNow} disabled={triggerScan.isPending}>
-            {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
-            지금 실행
-          </Button>
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <Input
+              type="date"
+              value={selectedDate}
+              onChange={(event) => setSelectedDate(event.target.value)}
+              className="h-9 w-[150px]"
+              aria-label="검색할 날짜"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRunForDate}
+              disabled={triggerScan.isPending || !selectedDate}
+            >
+              {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarSearch className="h-4 w-4" />}
+              이 날짜로 검색
+            </Button>
+            <Button size="sm" onClick={handleRunNow} disabled={triggerScan.isPending}>
+              {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
+              지금 실행 (전일)
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {scans.length === 0 ? (
