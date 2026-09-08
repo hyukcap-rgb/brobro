@@ -30,6 +30,16 @@ import { logger } from "./logger";
 // 공백은 매일 조금씩 나눠서 채워지고, 로그에 경고를 남긴다.
 const MAX_GAP_FILL_DAYS = 14;
 
+// 요구사항(재확인, 2026-09-08 사용자 확인): 나라장터의 "최종낙찰자" 데이터는
+// 개찰일이 지나도 몇 시간~며칠에 걸쳐 점진적으로 확정되어, 이미 "완료"로 기록된
+// 날짜라도 다시 스캔하면 새로 확정된 낙찰건이 추가로 나타날 수 있다. 기존
+// 갭필 로직은 "완료"로 기록된 날짜는 다시 보지 않으므로, 이런 뒤늦은 확정
+// 건들은 영구적으로 누락될 수 있었다 — 이를 막기 위해 매 실행마다 최근
+// N일(어제/그저께/그끄제)을 완료 여부와 무관하게 항상 다시 훑는다.
+// awardedMatchesTable insert는 onConflictDoNothing()이라 중복 저장 걱정 없이
+// 안전하게 재확인할 수 있다.
+const RECHECK_WINDOW_DAYS = 3;
+
 // 업무구분(사업 종류)별 나라장터 OpenAPI 엔드포인트. 조달청이 물품(Thng)/
 // 용역(Servc)/공사(Cnstwk)를 각각 별도 오퍼레이션으로 제공하기 때문에, 사용자가
 // 설정에서 고른 업무구분마다 이 매핑으로 정확한 URL을 찾아 따로 조회한다.
@@ -127,6 +137,24 @@ async function getMostRecentCoveredDateKey(): Promise<string | null> {
 // 빠짐없이 훑어 대상 날짜에 포함시킨다(정상적인 하루 1건 운영 시에는 결과가
 // computeTargetDates()와 동일 — 즉, 기존 동작을 바꾸지 않으면서 장애 이후에는
 // 자동으로 밀린 날짜를 채워 넣는다).
+function computeRecheckDates(instant: Date): KstDate[] {
+  const today = kstToday(instant);
+  const dates: KstDate[] = [];
+  for (let i = 1; i <= RECHECK_WINDOW_DAYS; i++) {
+    dates.push(shiftKstDate(today, -i));
+  }
+  return dates;
+}
+
+// 완료 여부와 무관하게 항상 재확인할 최근 N일을 base 날짜 목록에 합친다(중복은
+// key 기준으로 제거, 날짜순 정렬). explicitDateKey로 특정 날짜만 지정한
+// 수동검색 경로(createPendingScanRun)는 이 함수를 거치지 않으므로 영향받지 않는다.
+function withRecheckWindow(baseDates: KstDate[], instant: Date): KstDate[] {
+  const merged = new Map<string, KstDate>();
+  for (const date of [...baseDates, ...computeRecheckDates(instant)]) merged.set(date.key, date);
+  return [...merged.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
 export async function computeTargetDatesWithGapFill(instant: Date = new Date()): Promise<KstDate[]> {
   const today = kstToday(instant);
   const yesterday = shiftKstDate(today, -1);
@@ -134,14 +162,14 @@ export async function computeTargetDatesWithGapFill(instant: Date = new Date()):
 
   if (!lastCoveredKey) {
     // 완료된 실행 기록이 아직 없다(최초 실행). 기존 로직 그대로.
-    return computeTargetDates(instant);
+    return withRecheckWindow(computeTargetDates(instant), instant);
   }
 
   const lastCovered = kstDateFromKey(lastCoveredKey);
   if (lastCovered.key >= yesterday.key) {
     // 이미 어제까지(혹은 수동 재실행 등으로 그 이후까지) 커버되어 있다 — 손실
     // 구간 없음. 기존 로직(월요일/공휴일 다음날 이중 확인 포함) 그대로 수행한다.
-    return computeTargetDates(instant);
+    return withRecheckWindow(computeTargetDates(instant), instant);
   }
 
   // lastCovered 다음날부터 어제까지 공백을 전부 채운다.
@@ -165,7 +193,7 @@ export async function computeTargetDatesWithGapFill(instant: Date = new Date()):
     );
   }
 
-  return dates;
+  return withRecheckWindow(dates, instant);
 }
 
 async function fetchAwardsForDate(date: KstDate, source: WorkSource): Promise<Record<string, unknown>[]> {
