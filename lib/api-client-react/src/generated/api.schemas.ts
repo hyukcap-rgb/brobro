@@ -402,6 +402,11 @@ export const ScanRunTriggerType = {
   manual: 'manual',
 } as const;
 
+export interface TriggerScanInput {
+  /** @pattern ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ */
+  date?: string;
+}
+
 export interface ScanRun {
   id: number;
   targetDates: string[];
