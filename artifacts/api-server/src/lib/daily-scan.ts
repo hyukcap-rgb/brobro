@@ -320,8 +320,8 @@ export async function recoverOrphanedScanRuns(): Promise<number> {
 
 // 스캔 실행 기록만 즉시 만들어 반환한다 (수동 트리거 API가 바로 202로 응답할 수
 // 있도록). 실제 스캔은 executeScanRun에서 진행되며 몇 분씩 걸릴 수 있다.
-export async function createPendingScanRun(triggerType: "schedule" | "manual"): Promise<DailyScanRun> {
-  const targetDates = await computeTargetDatesWithGapFill();
+export async function createPendingScanRun(triggerType: "schedule" | "manual", explicitDateKey?: string): Promise<DailyScanRun> {
+  const targetDates = explicitDateKey ? [kstDateFromKey(explicitDateKey)] : await computeTargetDatesWithGapFill(); // 요구사항: 특정 날짜 지정 시 갭필 없이 그 날짜만 검색, 생략 시 기존 자동 로직(전일 기준+미완료 구간 자동 보충) 사용
   const [run] = await db
     .insert(dailyScanRunsTable)
     .values({ targetDates: targetDates.map((d) => d.key), status: "running", triggerType })
