@@ -12,7 +12,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
-  Download, FileDown, Loader2, PlayCircle, RefreshCw, Paperclip, AlertCircle, CheckCircle2, XCircle, Clock,
+  Download, FileDown, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
+  MapPin, Phone,
 } from "lucide-react";
 
 function formatDateTime(value: string | null | undefined): string {
@@ -34,6 +35,10 @@ function contactSourceLabel(source: string | null | undefined): string | null {
   if (source === "attachment") return "첨부파일에서 추출";
   if (source === "portal") return "포털 검색 보완";
   return null;
+}
+
+function telHref(phone: string): string {
+  return `tel:${phone.replace(/[^0-9+]/g, "")}`;
 }
 
 function scanStatusBadge(status: string) {
@@ -146,71 +151,40 @@ export default function Matches() {
               아직 매칭된 결과가 없습니다. 자동 검색은 매일 오전 7시에 실행됩니다.
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>공고번호</TableHead>
-                    <TableHead>현장명 / 발주기관</TableHead>
-                    <TableHead>업무구분</TableHead>
-                    <TableHead>낙찰자</TableHead>
-                    <TableHead>낙찰자 연락처</TableHead>
-                    <TableHead>현장사무소</TableHead>
-                    <TableHead>부직포 수량</TableHead>
-                    <TableHead>추정가격 / 예산 / 낙찰금액</TableHead>
-                    <TableHead>낙찰일</TableHead>
-                    <TableHead>첨부파일</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {matches.map((match) => (
-                    <TableRow key={match.id}>
-                      <TableCell className="font-mono text-xs whitespace-nowrap">{match.noticeNumber}</TableCell>
-                      <TableCell className="max-w-xs">
-                        <div className="font-medium">{match.siteName ?? match.noticeName ?? "-"}</div>
-                        <div className="text-xs text-muted-foreground">{match.demandAgency ?? "-"}</div>
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        <div>{match.workCategory ?? "-"}</div>
-                        {match.workTypeName ? <div className="text-muted-foreground">{match.workTypeName}</div> : null}
-                      </TableCell>
-                      <TableCell>{match.bidderName ?? "-"}</TableCell>
-                      <TableCell className="text-xs">
-                        <div>{match.bidderPhone ?? "-"}</div>
-                        <div className="text-muted-foreground">{match.bidderAddress ?? "-"}</div>
-                        {contactSourceLabel(match.contactSource) ? (
-                          <Badge variant="outline" className="mt-1 text-[10px] font-normal">
-                            {contactSourceLabel(match.contactSource)}
-                          </Badge>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="max-w-[180px] text-xs">{match.siteOffice ?? "미확인"}</TableCell>
-                      <TableCell>{match.quantityText ?? "-"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">
-                        <div>추정 {formatAmount(match.estimatedAmount)}</div>
-                        <div className="text-muted-foreground">예산 {formatAmount(match.budgetAmount)}</div>
-                        <div className="text-muted-foreground">낙찰 {formatAmount(match.awardAmount)}</div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs">{match.awardDate ?? "-"}</TableCell>
-                      <TableCell>
-                        {match.attachmentStoredPath ? (
-                          <a
-                            className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
-                            href={`/api/matches/${match.id}/attachment`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            <Paperclip className="h-3 w-3" />
-                            {match.attachmentFileName ?? "파일"}
-                          </a>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">-</span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+              {matches.map((match) => (
+                <div key={match.id} className="rounded-md border p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-xs text-muted-foreground">{match.noticeNumber}</span>
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">{match.awardDate ?? "-"}</span>
+                  </div>
+                  <div className="font-medium leading-snug">{match.bidderName ?? "낙찰자 미확인"}</div>
+                  <div className="text-sm text-muted-foreground">
+                    규모 {formatAmount(match.budgetAmount ?? match.awardAmount)}
+                  </div>
+                  <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                    <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <span>{match.bidderAddress ?? "주소 미확인"}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-sm">
+                      <Phone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      {match.bidderPhone ? (
+                        <a href={telHref(match.bidderPhone)} className="text-primary hover:underline">
+                          {match.bidderPhone}
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">연락처 미확인</span>
+                      )}
+                    </div>
+                    {contactSourceLabel(match.contactSource) ? (
+                      <Badge variant="outline" className="text-[10px] font-normal shrink-0">
+                        {contactSourceLabel(match.contactSource)}
+                      </Badge>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
