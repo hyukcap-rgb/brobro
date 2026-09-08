@@ -426,7 +426,12 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         const attachments = collectAttachments(detail).sort(
           (a, b) => Number(isPriorityAttachment(b.name)) - Number(isPriorityAttachment(a.name)),
         );
-        if (attachments.length === 0) continue;
+        if (attachments.length === 0) {
+          // 원인 진단용 임시 로그: 매칭이 0건인 이유가 "첨부파일 자체가 없어서"인지
+          // 아니면 다른 단계(다운로드/텍스트 추출)에서 실패하는지 구분하기 위함.
+          logger.warn({ noticeNumber, source }, "일별 스캔[진단]: 공고 상세에 첨부파일 URL이 없음");
+          continue;
+        }
 
         const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-"));
         try {
@@ -459,11 +464,28 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               let segments;
               try {
                 segments = await extractSegments(searchablePath);
-              } catch {
+              } catch (error) {
+                // 원인 진단용 임시 로그: 예전에는 여기서 에러를 완전히 삼켜서
+                // (아무 로그도 없이 continue) 텍스트 추출 자체가 매번 실패해도
+                // 알 방법이 없었다. 확장자와 에러 메시지를 남긴다.
+                logger.warn(
+                  { err: error, noticeNumber, fileName: path.basename(searchablePath), ext: path.extname(searchablePath) },
+                  "일별 스캔[진단]: 첨부파일 텍스트 추출 실패",
+                );
                 continue;
               }
               // 요구사항 4: 설정된 키워드(=선택한 품목, 기본 "부직포")가 있는 공고만.
               const matches = searchSegments(segments, settings.matchKeywords);
+              logger.info(
+                {
+                  noticeNumber,
+                  fileName: path.basename(searchablePath),
+                  ext: path.extname(searchablePath),
+                  segmentCount: segments.length,
+                  matchCount: matches.length,
+                },
+                "일별 스캔[진단]: 첨부파일 텍스트 추출 결과",
+              );
               if (matches.length === 0) continue;
 
               // 요구사항 6: 매칭된 첨부파일을 영구 저장(볼륨)한다.
