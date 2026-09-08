@@ -197,7 +197,7 @@ export const GetScanResponse = zod.object({
 /**
  * @summary Manually trigger a daily scan run
  */
-export const TriggerScanResponse = zod.object({
+export const triggerScanBodyDateRegExp = new RegExp('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); /** @summary Manually trigger a daily scan run */ export const TriggerScanBody = zod.object({ "date": zod.string().regex(triggerScanBodyDateRegExp).optional() }); export const TriggerScanResponse = zod.object({
   "id": zod.number(),
   "targetDates": zod.array(zod.string()),
   "status": zod.enum(['running', 'completed', 'failed']),
