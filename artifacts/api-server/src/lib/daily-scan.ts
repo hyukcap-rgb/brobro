@@ -342,6 +342,18 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
   let candidatesChecked = 0;
   let matchesFound = 0;
 
+  // 원인 진단용 임시 카운터: candidatesChecked는 늘어나는데 matchesFound는
+  // 0건인 이유가 "필터에 다 걸러져서 첨부파일 검색까지 가지도 못하는 것"인지,
+  // "첨부파일 검색까지는 가는데 키워드가 없는 것"인지 한눈에 보기 위함.
+  const funnel = {
+    noDetail: 0,
+    skippedBudget: 0,
+    skippedEstimatedPrice: 0,
+    skippedWorkType: 0,
+    noAttachmentUrl: 0,
+    reachedAttachmentSearch: 0,
+  };
+
   // 같은 낙찰자가 여러 건 매칭되면(같은 공고의 여러 첨부파일, 또는 여러 공고를
   // 함께 낙찰) 네이버 API를 그때마다 새로 호출하지 않도록 낙찰자 이름 기준으로
   // 이번 스캔 실행 동안만 결과를 캐시한다 (무료 API 호출 한도 보호).
@@ -401,26 +413,41 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           logger.warn({ err: error, noticeNumber, source }, "일별 스캔: 공고 상세 조회 실패");
           continue;
         }
-        if (!detail) continue;
+        if (!detail) {
+          funnel.noDetail += 1;
+          continue;
+        }
 
         // 요구사항 3: 공사 규모 필터 (최종 확인).
         const budgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0);
-        if (budgetAmount < settings.minBudgetAmount) continue;
+        if (budgetAmount < settings.minBudgetAmount) {
+          funnel.skippedBudget += 1;
+          continue;
+        }
 
         // 요구사항 2: 추정가격(presmptPrce) 범위 필터. 값이 있을 때만 적용한다 —
         // 일부 공고는 추정가격을 공개하지 않아 0/누락으로 오는 경우가 있는데, 그런
         // 공고까지 걸러내면 위의 예산 기준 필터와 상충해 리드를 놓치게 된다.
         const estimatedAmount = Number(detail.presmptPrce ?? 0) || null;
         if (estimatedAmount != null) {
-          if (settings.minEstimatedPrice != null && estimatedAmount < settings.minEstimatedPrice) continue;
-          if (settings.maxEstimatedPrice != null && estimatedAmount > settings.maxEstimatedPrice) continue;
+          if (settings.minEstimatedPrice != null && estimatedAmount < settings.minEstimatedPrice) {
+            funnel.skippedEstimatedPrice += 1;
+            continue;
+          }
+          if (settings.maxEstimatedPrice != null && estimatedAmount > settings.maxEstimatedPrice) {
+            funnel.skippedEstimatedPrice += 1;
+            continue;
+          }
         }
 
         // 요구사항 1: 업무구분(공종) 필터 — 공사 카테고리에만 의미가 있다(주공종명/
         // 부공종명은 Cnstwk 응답에만 존재).
         const { matched: workTypeMatched, workTypeName } =
           source === "공사" ? classifyWorkType(detail, settings.workTypeKeywords) : { matched: true, workTypeName: null };
-        if (!workTypeMatched) continue;
+        if (!workTypeMatched) {
+          funnel.skippedWorkType += 1;
+          continue;
+        }
 
         // 요구사항 4, 5: 공사 내역/요청서 첨부파일에서 키워드(=우리가 설정한 품목) 검색.
         const attachments = collectAttachments(detail).sort(
@@ -429,9 +456,14 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         if (attachments.length === 0) {
           // 원인 진단용 임시 로그: 매칭이 0건인 이유가 "첨부파일 자체가 없어서"인지
           // 아니면 다른 단계(다운로드/텍스트 추출)에서 실패하는지 구분하기 위함.
-          logger.warn({ noticeNumber, source }, "일별 스캔[진단]: 공고 상세에 첨부파일 URL이 없음");
+          funnel.noAttachmentUrl += 1;
+          logger.warn(
+            { noticeNumber, source, bidNtceNm: detail.bidNtceNm },
+            "일별 스캔[진단]: 공고 상세에 첨부파일 URL이 없음",
+          );
           continue;
         }
+        funnel.reachedAttachmentSearch += 1;
 
         const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-"));
         try {
@@ -558,6 +590,13 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         }
       }
     }
+
+    // 원인 진단용 임시 로그: 위 funnel 카운터를 한 줄로 모아서, "왜 매칭이
+    // 0건인지"를 각 단계별로 몇 건이 걸러졌는지 한눈에 볼 수 있게 한다.
+    logger.warn(
+      { runId: run.id, candidatesChecked, ...funnel, matchesFound },
+      "일별 스캔[진단]: 후보 필터링 단계별 요약",
+    );
 
     const [completed] = await db
       .update(dailyScanRunsTable)
