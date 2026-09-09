@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import {
   Download, FileDown, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
-  MapPin, Phone, CalendarSearch,
+  MapPin, Phone, CalendarSearch, Search,
 } from "lucide-react";
 
 // KST(Asia/Seoul) 기준 "어제" 날짜를 YYYY-MM-DD로 반환한다. 서버의 자동 검색과
@@ -55,6 +55,15 @@ function contactSourceLabel(source: string | null | undefined): string | null {
 
 function telHref(phone: string): string {
   return `tel:${phone.replace(/[^0-9+]/g, "")}`;
+}
+
+// 요구사항(전화번호 검색, 2026-09-09 사용자 리포트: "전화번호를 검색해서
+// 보여줘"): 나라장터가 내려주는 전화번호는 "***********"처럼 개인정보
+// 마스킹된 채로 오는 경우가 많다(daily-scan.ts의 isUsablePhone과 동일 기준).
+// 마스킹된 값을 그대로 tel: 링크로 보여주면 아무 쓸모가 없으므로 "확인불가"로
+// 취급하고, 그 옆에 다시 검색할 수 있는 버튼을 보여준다.
+function isUsablePhone(phone: string | null | undefined): boolean {
+  return Boolean(phone && !phone.includes("*"));
 }
 
 // 요구사항(2026-09-09 사용자 요청: "이름을 클릭하면 네이버 검색창을 새창으로
@@ -131,6 +140,17 @@ export default function Matches() {
   const handleRunForRange = () => {
     if (rangeInvalid) return;
     runScan({ startDate, endDate });
+  };
+
+  const [refreshingContactId, setRefreshingContactId] = useState<number | null>(null);
+  const handleRefreshContact = async (id: number) => {
+    setRefreshingContactId(id);
+    try {
+      await fetch(`/api/matches/${id}/refresh-contact`, { method: "POST", credentials: "include" });
+    } finally {
+      setRefreshingContactId(null);
+      void matchesQuery.refetch();
+    }
   };
 
   const handleDownload = async (url: string, fileName: string) => {
@@ -225,13 +245,31 @@ export default function Matches() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 text-sm">
                       <Phone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      {match.bidderPhone ? (
-                        <a href={telHref(match.bidderPhone)} className="text-primary hover:underline">
+                      {isUsablePhone(match.bidderPhone) ? (
+                        <a href={telHref(match.bidderPhone!)} className="text-primary hover:underline">
                           {match.bidderPhone}
                         </a>
                       ) : (
-                        <span className="text-muted-foreground">연락처 미확인</span>
+                        <span className="text-muted-foreground">
+                          {match.bidderPhone ? "번호 비공개(마스킹)" : "연락처 미확인"}
+                        </span>
                       )}
+                      {!isUsablePhone(match.bidderPhone) ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleRefreshContact(match.id)}
+                          disabled={refreshingContactId === match.id}
+                          className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50 shrink-0"
+                          title="네이버에서 전화번호 다시 찾기"
+                        >
+                          {refreshingContactId === match.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Search className="h-3 w-3" />
+                          )}
+                          다시 찾기
+                        </button>
+                      ) : null}
                     </div>
                     {contactSourceLabel(match.contactSource) ? (
                       <Badge variant="outline" className="text-[10px] font-normal shrink-0">
