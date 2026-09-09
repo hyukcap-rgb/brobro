@@ -35,7 +35,7 @@ import type {
   LoginInput,
   MatchListResponse,
   ScanRun,
-  ScanRunListResponse
+  ScanRunListResponse, 
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -919,12 +919,12 @@ export const getTriggerScanUrl = () => {
 /**
  * @summary Manually trigger a daily scan run
  */
-export const triggerScan = async ( options?: Parameters<typeof customFetch>[1]): Promise<ScanRun> => {
+export const triggerScan = async (triggerScanInput: TriggerScanInput, options?: Parameters<typeof customFetch>[1]): Promise<ScanRun> => {
 
   return customFetch<ScanRun>(getTriggerScanUrl(),
   {
     ...options,
-    method: 'POST'
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...options?.headers }, body: JSON.stringify(triggerScanInput)
 
 
   }
@@ -935,8 +935,8 @@ export const triggerScan = async ( options?: Parameters<typeof customFetch>[1]):
 
 
 export const getTriggerScanMutationOptions = <TError = ErrorType<unknown>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof triggerScan>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof triggerScan>>, TError,void, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof triggerScan>>, TError,{data: BodyType<TriggerScanInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof triggerScan>>, TError,{data: BodyType<TriggerScanInput>}, TContext> => {
 
 const mutationKey = ['triggerScan'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -948,10 +948,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof triggerScan>>, void> = () => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof triggerScan>>, {data: BodyType<TriggerScanInput>}> = (props) => { const {data} = props ?? {};
 
 
-          return  triggerScan(requestOptions)
+          return  triggerScan(data,requestOptions)
         }
 
 
@@ -961,7 +961,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
   return  { mutationFn, ...mutationOptions }}
 
-    export type TriggerScanMutationResult = NonNullable<Awaited<ReturnType<typeof triggerScan>>>
+    export type TriggerScanMutationResult = NonNullable<Awaited<ReturnType<typeof triggerScan>>>; export type TriggerScanMutationBody = BodyType<TriggerScanInput>
 
     export type TriggerScanMutationError = ErrorType<unknown>
 
@@ -969,11 +969,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Manually trigger a daily scan run
  */
 export const useTriggerScan = <TError = ErrorType<unknown>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof triggerScan>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof triggerScan>>, TError,{data: BodyType<TriggerScanInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof triggerScan>>,
         TError,
-        void,
+        {data: BodyType<TriggerScanInput>},
         TContext
       > => {
       return useMutation(getTriggerScanMutationOptions(options));
