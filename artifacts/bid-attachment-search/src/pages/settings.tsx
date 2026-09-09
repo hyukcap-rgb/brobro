@@ -13,11 +13,21 @@ function TagEditor({
   description,
   values,
   onChange,
+  emptyHint = "(전체 허용, 필터 없음)",
+  required = false,
 }: {
   label: string;
   description: string;
   values: string[];
   onChange: (values: string[]) => void;
+  // 요구사항(설정 저장 오류 명확화, 2026-09-09 사용자 리포트: "설정이 없으면
+  // 에러가 나네"): 이 컴포넌트는 검색 키워드/공종 키워드 둘 다에 쓰이는데,
+  // 실제로는 검색 키워드를 비우면 저장이 거부되고(서버 스키마 min(1)) 비워도
+  // 스캔이 "전체 허용"이 되는 게 아니라 아무 것도 매칭되지 않는다. 반면 공종
+  // 키워드는 비우면 정말로 "전체 허용"이다. 필드마다 다른 빈 상태 안내 문구를
+  // 넣을 수 있게 했다.
+  emptyHint?: string;
+  required?: boolean;
 }) {
   const [draft, setDraft] = useState("");
 
@@ -45,7 +55,9 @@ function TagEditor({
             </button>
           </Badge>
         ))}
-        {values.length === 0 ? <span className="text-xs text-muted-foreground">(전체 허용, 필터 없음)</span> : null}
+        {values.length === 0 ? (
+          <span className={`text-xs ${required ? "text-destructive" : "text-muted-foreground"}`}>{emptyHint}</span>
+        ) : null}
       </div>
       <div className="flex gap-2">
         <Input
@@ -155,7 +167,15 @@ export default function Settings() {
     setMinBudgetAmount(String(settingsQuery.data.minBudgetAmount));
   }, [settingsQuery.data]);
 
+  // 요구사항(설정 저장 오류 명확화, 2026-09-09): 서버까지 갔다가 400으로
+  // 튕기지 않도록, 저장이 반드시 실패할 상태(필수 필드가 비어있음)를 미리
+  // 감지해 저장 버튼 자체를 막고 이유를 화면에 보여준다.
+  const matchKeywordsEmpty = matchKeywords.length === 0;
+  const workCategoriesEmpty = workCategories.length === 0;
+  const canSave = !matchKeywordsEmpty && !workCategoriesEmpty;
+
   const handleSave = () => {
+    if (!canSave) return;
     setSaved(false);
     updateSettings.mutate(
       {
@@ -229,6 +249,8 @@ export default function Settings() {
             description="1차로 찾은 공고의 첨부파일(내역서/시방서 등)에서 이 키워드(품목)가 발견되면 리드로 등록합니다. 기본값: 부직포"
             values={matchKeywords}
             onChange={setMatchKeywords}
+            required
+            emptyHint="최소 1개 이상 입력해야 합니다. 비워두면 저장할 수 없습니다 (비워도 '전체 허용'이 아니라 아무 공고도 매칭되지 않기 때문입니다)."
           />
           <TagEditor
             label="업무구분(공종) 키워드 — 공사에만 적용"
@@ -250,6 +272,12 @@ export default function Settings() {
             />
           </div>
 
+          {!canSave ? (
+            <div className="flex items-center gap-2 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4" />
+              {matchKeywordsEmpty ? "검색 키워드를 최소 1개 이상 입력해야 저장할 수 있습니다." : "업무구분을 최소 1개 이상 선택해야 저장할 수 있습니다."}
+            </div>
+          ) : null}
           {updateSettings.isError ? (
             <div className="flex items-center gap-2 text-sm text-destructive">
               <AlertCircle className="h-4 w-4" />
@@ -262,7 +290,7 @@ export default function Settings() {
             </div>
           ) : null}
 
-          <Button onClick={handleSave} disabled={updateSettings.isPending}>
+          <Button onClick={handleSave} disabled={updateSettings.isPending || !canSave}>
             {updateSettings.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             저장
           </Button>
