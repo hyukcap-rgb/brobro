@@ -346,10 +346,29 @@ export async function recoverOrphanedScanRuns(): Promise<number> {
   return orphaned.length;
 }
 
+// 요구사항(기간 검색, 2026-09-09 사용자 요청): 시작일~종료일(포함) 구간의 모든
+// 날짜를 대상으로 만든다. 사용자가 "검색 기간을 내가 설정하는거야"라고 명시적
+// 요청 — 기존에는 시작 날짜 하나만 받아 그 하루만 검색했다.
+function buildDateRange(startKey: string, endKey: string): KstDate[] {
+  const dates: KstDate[] = [];
+  let cursor = kstDateFromKey(startKey);
+  const end = kstDateFromKey(endKey);
+  while (cursor.key <= end.key) {
+    dates.push(cursor);
+    cursor = shiftKstDate(cursor, 1);
+  }
+  return dates;
+}
+
 // 스캔 실행 기록만 즉시 만들어 반환한다 (수동 트리거 API가 바로 202로 응답할 수
 // 있도록). 실제 스캔은 executeScanRun에서 진행되며 몇 분씩 걸릴 수 있다.
-export async function createPendingScanRun(triggerType: "schedule" | "manual", explicitDateKey?: string): Promise<DailyScanRun> {
-  const targetDates = explicitDateKey ? [kstDateFromKey(explicitDateKey)] : await computeTargetDatesWithGapFill(); // 요구사항: 특정 날짜 지정 시 갭필 없이 그 날짜만 검색, 생략 시 기존 자동 로직(전일 기준+미완료 구간 자동 보충) 사용
+export async function createPendingScanRun(
+  triggerType: "schedule" | "manual",
+  explicitDateRange?: { start: string; end: string },
+): Promise<DailyScanRun> {
+  const targetDates = explicitDateRange
+    ? buildDateRange(explicitDateRange.start, explicitDateRange.end)
+    : await computeTargetDatesWithGapFill(); // 요구사항: 기간 지정 시 갭필 없이 그 구간만 검색, 생략 시 기존 자동 로직(전일 기준+미완료 구간 자동 보충) 사용
   const [run] = await db
     .insert(dailyScanRunsTable)
     .values({ targetDates: targetDates.map((d) => d.key), status: "running", triggerType })
