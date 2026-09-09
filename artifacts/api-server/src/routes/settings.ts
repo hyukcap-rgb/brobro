@@ -24,7 +24,9 @@ const SETTINGS_FIELD_ERROR_MESSAGES: Record<string, string> = {
 router.put("/settings", async (req, res) => {
   const input = UpdateSettingsBody.safeParse(req.body);
   if (!input.success) {
-    res.status(400).json({ error: "설정 값을 확인해 주세요." });
+    const field = input.error.issues[0]?.path[0];
+    const message = (field != null && SETTINGS_FIELD_ERROR_MESSAGES[String(field)]) || "설정 값을 확인해 주세요.";
+    res.status(400).json({ error: message });
     return;
   }
   try {
