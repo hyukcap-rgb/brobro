@@ -57,6 +57,15 @@ function telHref(phone: string): string {
   return `tel:${phone.replace(/[^0-9+]/g, "")}`;
 }
 
+// 요구사항(2026-09-09 사용자 요청: "이름을 클릭하면 네이버 검색창을 새창으로
+// 보여주고"): 나라장터가 내려주는 낙찰자 전화번호는 개인정보 보호를 위해
+// 마스킹되어 있는 경우가 많아(daily-scan.ts의 isUsablePhone 참고) 자동으로도
+// 못 찾을 때가 있다. 그럴 때 사용자가 직접 회사명으로 네이버에서 전화번호를
+// 찾아볼 수 있도록 낙찰자명을 새 탭에서 열리는 네이버 검색 링크로 만든다.
+function naverSearchHref(query: string): string {
+  return `https://search.naver.com/search.naver?query=${encodeURIComponent(`${query} 전화번호`)}`;
+}
+
 function scanStatusBadge(status: string) {
   if (status === "completed") {
     return (
@@ -191,7 +200,21 @@ export default function Matches() {
                     <span className="font-mono text-xs text-muted-foreground">{match.noticeNumber}</span>
                     <span className="text-xs text-muted-foreground whitespace-nowrap">{match.awardDate ?? "-"}</span>
                   </div>
-                  <div className="font-medium leading-snug">{match.bidderName ?? "낙찰자 미확인"}</div>
+                  <div className="font-medium leading-snug">
+                    {match.bidderName ? (
+                      <a
+                        href={naverSearchHref(match.bidderName)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:underline hover:text-primary"
+                        title="네이버에서 전화번호 검색"
+                      >
+                        {match.bidderName}
+                      </a>
+                    ) : (
+                      "낙찰자 미확인"
+                    )}
+                  </div>
                   <div className="text-sm text-muted-foreground">
                     규모 {formatAmount(match.budgetAmount ?? match.awardAmount)}
                   </div>
