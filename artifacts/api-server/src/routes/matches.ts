@@ -54,6 +54,13 @@ router.get("/matches/:id/attachment", async (req, res) => {
     res.status(404).json({ error: "저장된 첨부파일이 없습니다." });
     return;
   }
+  // 요구사항(첨부파일 보관, 2026-09-09): 5개월 보관기간이 지나 자동삭제된 경우
+  // resolveMatchAttachmentPath가 던지는 일반 "파일을 찾을 수 없습니다" 대신
+  // 사유를 명확히 안내한다.
+  if (match.attachmentDeletedAt) {
+    res.status(410).json({ error: "보관기간(5개월)이 지나 첨부파일이 자동 삭제되었습니다." });
+    return;
+  }
   try {
     const filePath = await resolveMatchAttachmentPath(match.attachmentStoredPath);
     res.sendFile(filePath);
