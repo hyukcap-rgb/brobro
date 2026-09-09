@@ -41,3 +41,4 @@ export * from './scanRun';
 export * from './scanRunListResponse';
 export * from './scanRunStatus';
 export * from './scanRunTriggerType';
+export * from './triggerScanInput';
