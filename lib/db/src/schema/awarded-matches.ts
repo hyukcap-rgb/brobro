@@ -41,6 +41,11 @@ export const awardedMatchesTable = pgTable(
     surroundingText: text("surrounding_text"),
     attachmentFileName: text("attachment_file_name"),
     attachmentStoredPath: text("attachment_stored_path"),
+    // 요구사항(첨부파일 보관, 2026-09-09): 다운로드된 첨부파일은 최대 5개월간만
+    // 디스크에 보관하고 자동 삭제된다(재요청 방지용 캐시일 뿐, 리드 원본 데이터가
+    // 아니므로). 이 컬럼이 채워지면 실제 파일은 이미 삭제된 상태이고, 매칭 레코드
+    // 자체(리드 정보)는 그대로 남는다 — attachment-cleanup.ts 참고.
+    attachmentDeletedAt: timestamp("attachment_deleted_at", { withTimezone: true }),
     smsSentAt: timestamp("sms_sent_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
