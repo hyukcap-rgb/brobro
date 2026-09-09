@@ -82,7 +82,12 @@ function scanStatusBadge(status: string) {
 export default function Matches() {
   const queryClient = useQueryClient();
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [selectedDate, setSelectedDate] = useState<string>(() => getKstYesterdayKey());
+  // 요구사항(기간 검색, 2026-09-09 사용자 요청: "이날짜로 검색은 검색 기간을
+  // 내가 설정하는거야... 지금은 시작 날짜만 있는거잖아"): 시작일 하나만 있던
+  // 것을 시작일~종료일 기간으로 바꾼다. 기본값은 둘 다 "어제"(하루짜리 구간)로
+  // 시작해, 기존처럼 하루만 재검색하고 싶으면 그대로 버튼만 누르면 된다.
+  const [startDate, setStartDate] = useState<string>(() => getKstYesterdayKey());
+  const [endDate, setEndDate] = useState<string>(() => getKstYesterdayKey());
   const matchesQuery = useListMatches(
     { limit: 500 },
     { query: { queryKey: getListMatchesQueryKey({ limit: 500 }), refetchInterval: 30_000 } },
@@ -96,9 +101,9 @@ export default function Matches() {
   const matches = matchesQuery.data?.matches ?? [];
   const scans = scansQuery.data?.scans ?? [];
 
-  const runScan = (date?: string) => {
+  const runScan = (range?: { startDate: string; endDate: string }) => {
     triggerScan.mutate(
-      { data: date ? { date } : {} },
+      { data: range ? range : {} },
       {
         onSuccess: () => {
           void queryClient.invalidateQueries({ queryKey: getListScansQueryKey({ limit: 20 }) });
@@ -111,10 +116,12 @@ export default function Matches() {
     );
   };
 
+  const rangeInvalid = !startDate || !endDate || endDate < startDate;
+
   const handleRunNow = () => runScan();
-  const handleRunForDate = () => {
-    if (!selectedDate) return;
-    runScan(selectedDate);
+  const handleRunForRange = () => {
+    if (rangeInvalid) return;
+    runScan({ startDate, endDate });
   };
 
   const handleDownload = async (url: string, fileName: string) => {
@@ -221,26 +228,34 @@ export default function Matches() {
           <div>
             <CardTitle>자동 검색 실행 기록</CardTitle>
             <CardDescription>
-              매일 오전 7시(KST) 자동으로 전일 공고를 검색합니다. 필요하면 지금 바로 실행하거나, 원하는 날짜를
-              직접 골라 다시 검색해볼 수 있습니다.
+              매일 오전 7시(KST) 자동으로 전일 공고를 검색합니다. 필요하면 지금 바로 실행하거나, 원하는 기간을
+              직접 지정해 다시 검색해볼 수 있습니다 (시작일=종료일이면 하루만 검색).
             </CardDescription>
           </div>
           <div className="flex items-center gap-2 flex-wrap shrink-0">
             <Input
               type="date"
-              value={selectedDate}
-              onChange={(event) => setSelectedDate(event.target.value)}
+              value={startDate}
+              onChange={(event) => setStartDate(event.target.value)}
               className="h-9 w-[150px]"
-              aria-label="검색할 날짜"
+              aria-label="검색 시작일"
+            />
+            <span className="text-sm text-muted-foreground">~</span>
+            <Input
+              type="date"
+              value={endDate}
+              onChange={(event) => setEndDate(event.target.value)}
+              className="h-9 w-[150px]"
+              aria-label="검색 종료일"
             />
             <Button
               variant="outline"
               size="sm"
-              onClick={handleRunForDate}
-              disabled={triggerScan.isPending || !selectedDate}
+              onClick={handleRunForRange}
+              disabled={triggerScan.isPending || rangeInvalid}
             >
               {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarSearch className="h-4 w-4" />}
-              이 날짜로 검색
+              이 기간으로 검색
             </Button>
             <Button size="sm" onClick={handleRunNow} disabled={triggerScan.isPending}>
               {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
@@ -249,6 +264,11 @@ export default function Matches() {
           </div>
         </CardHeader>
         <CardContent>
+          {rangeInvalid && startDate && endDate ? (
+            <div className="flex items-center gap-2 text-sm text-destructive mb-3">
+              <AlertCircle className="h-4 w-4" /> 종료일이 시작일보다 빠를 수 없습니다.
+            </div>
+          ) : null}
           {scans.length === 0 ? (
             <div className="text-sm text-muted-foreground py-4 text-center">실행 기록이 없습니다.</div>
           ) : (
