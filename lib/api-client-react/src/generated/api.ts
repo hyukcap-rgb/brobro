@@ -35,7 +35,8 @@ import type {
   LoginInput,
   MatchListResponse,
   ScanRun,
-  ScanRunListResponse, 
+  ScanRunListResponse,
+  TriggerScanInput
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
