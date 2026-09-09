@@ -81,6 +81,10 @@ export async function ensureSchema(): Promise<void> {
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS contact_source TEXT;
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS estimated_amount BIGINT;
 
+    -- 첨부파일 5개월 보관/자동삭제(attachment-cleanup.ts). 채워지면 디스크 파일은
+    -- 이미 삭제된 상태이고 리드 레코드 자체는 남아있음을 뜻한다.
+    ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS attachment_deleted_at TIMESTAMPTZ;
+
     -- express-session's store (connect-pg-simple) ships a table.sql asset it
     -- reads from disk to create this table on demand ("createTableIfMissing").
     -- That file doesn't survive our esbuild bundling step, so relying on it
