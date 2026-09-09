@@ -1,7 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureAdminSeeded } from "./lib/auth";
-import { startDailyScanScheduler } from "./lib/scheduler";
+import { startDailyScanScheduler, startAttachmentCleanupScheduler } from "./lib/scheduler";
 import { recoverOrphanedScanRuns } from "./lib/daily-scan";
 import { ensureSchema } from "@workspace/db";
 
@@ -23,6 +23,7 @@ ensureSchema()
   .then(() => ensureAdminSeeded())
   .then(() => recoverOrphanedScanRuns())
   .then(() => startDailyScanScheduler())
+  .then(() => startAttachmentCleanupScheduler())
   .catch((err: unknown) => {
     logger.error({ err }, "Could not initialize database schema/admin account");
   });
