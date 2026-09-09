@@ -279,10 +279,22 @@ function guessSiteOffice(text: string): string | null {
   return match ? match[2].trim() : null;
 }
 
-// 요구사항 7, 8: 정부 낙찰기록에 낙찰자 주소/전화가 비어있으면, 이미 다운로드해 둔
-// 첨부파일 텍스트에서 먼저 찾아보고(무료), 그래도 없으면 네이버 지역검색 API로
-// 최후 보완한다(NAVER_CLIENT_ID/SECRET 필요, 없으면 조용히 건너뜀). 어느 경로로
-// 채웠는지는 contactSource로 남겨 화면/엑셀에서 신뢰도를 구분할 수 있게 한다.
+// 요구사항(전화번호 검색, 2026-09-09 사용자 리포트: "전화번호를 검색해서
+// 보여줘"): 나라장터 낙찰정보 API는 낙찰자 전화번호를 개인정보 보호를 위해
+// "***********" 같은 별표로 마스킹해서 내려주는 경우가 많다. 예전 코드는 이
+// 마스킹된 값도 "값이 있다"고 보고 첨부파일/네이버 검색을 건너뛰어서, 화면에
+// 아무 쓸모 없는 별표만 뜨고 실제 번호는 찾지 않는 문제가 있었다. 별표가 섞인
+// 값은 "아직 못 찾은 것"으로 취급해 첨부파일 → 네이버 지역검색으로 계속
+// 진짜 번호를 찾도록 고친다.
+function isUsablePhone(phone: string | null | undefined): boolean {
+  return Boolean(phone && !phone.includes("*"));
+}
+
+// 요구사항 7, 8: 정부 낙찰기록에 낙찰자 주소/전화가 비어있거나(위 마스킹 포함)
+// 쓸 수 없으면, 이미 다운로드해 둔 첨부파일 텍스트에서 먼저 찾아보고(무료),
+// 그래도 없으면 네이버 지역검색 API로 최후 보완한다(NAVER_CLIENT_ID/SECRET
+// 필요, 없으면 조용히 건너뜀). 어느 경로로 채웠는지는 contactSource로 남겨
+// 화면/엑셀에서 신뢰도를 구분할 수 있게 한다.
 async function resolveBidderContact(
   bidderName: string | null,
   addressFromAward: string | null,
@@ -290,7 +302,7 @@ async function resolveBidderContact(
   attachmentText: string,
 ): Promise<{ address: string | null; phone: string | null; contactSource: "government" | "attachment" | "portal" | null }> {
   let address = addressFromAward;
-  let phone = phoneFromAward;
+  let phone = isUsablePhone(phoneFromAward) ? phoneFromAward : null;
   let contactSource: "government" | "attachment" | "portal" | null = address || phone ? "government" : null;
 
   if (!bidderName) return { address, phone, contactSource };
@@ -303,8 +315,8 @@ async function resolveBidderContact(
     address = fromAttachment.address;
     contactSource = "attachment";
   }
-  if (needsPhone && fromAttachment.phone) {
-    phone = fromAttachment.phone;
+  if (needsPhone && isUsablePhone(fromAttachment.phone)) {
+    phone = fromAttachment.phone ?? null;
     contactSource = "attachment";
   }
 
@@ -316,8 +328,8 @@ async function resolveBidderContact(
       address = fromPortal.address;
       contactSource = "portal";
     }
-    if (!phone && fromPortal.phone) {
-      phone = fromPortal.phone;
+    if (!phone && isUsablePhone(fromPortal.phone)) {
+      phone = fromPortal.phone ?? null;
       contactSource = "portal";
     }
   }
