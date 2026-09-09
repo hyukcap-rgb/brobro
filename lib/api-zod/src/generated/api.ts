@@ -197,7 +197,16 @@ export const GetScanResponse = zod.object({
 /**
  * @summary Manually trigger a daily scan run
  */
-export const triggerScanBodyDateRegExp = new RegExp('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); /** @summary Manually trigger a daily scan run */ export const TriggerScanBody = zod.object({ "date": zod.string().regex(triggerScanBodyDateRegExp).optional() }); export const TriggerScanResponse = zod.object({
+export const triggerScanBodyStartDateRegExp = new RegExp('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+export const triggerScanBodyEndDateRegExp = new RegExp('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+
+
+export const TriggerScanBody = zod.object({
+  "startDate": zod.string().regex(triggerScanBodyStartDateRegExp).optional().describe('수동 검색 대상 기간의 시작일(YYYY-MM-DD, KST). endDate 없이 이것만 주면 하루(startDate)만 검색한다. 둘 다 생략하면 기존 자동 로직(전일 기준, 미완료 구간 자동 보충)을 그대로 사용한다.'),
+  "endDate": zod.string().regex(triggerScanBodyEndDateRegExp).optional().describe('수동 검색 대상 기간의 종료일(YYYY-MM-DD, KST, 포함). startDate가 있어야 의미가 있다. 최대 31일 구간까지 허용한다.')
+})
+
+export const TriggerScanResponse = zod.object({
   "id": zod.number(),
   "targetDates": zod.array(zod.string()),
   "status": zod.enum(['running', 'completed', 'failed']),
