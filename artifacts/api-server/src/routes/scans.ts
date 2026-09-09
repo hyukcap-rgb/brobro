@@ -37,16 +37,40 @@ router.get("/scans/:id", async (req, res) => {
 
 // 즉시 실행 요청은 실행 기록만 만들어 바로 202로 응답하고, 실제 스캔(첨부파일 다운로드/
 // 파싱 포함, 수 분 소요 가능)은 백그라운드에서 진행한다. 진행 상황은 /scans 폴링으로 확인.
-// body.date(YYYY-MM-DD)를 지정하면 그 날짜만 정확히 재검색하고, 생략하면 기존
-// 자동 로직(전일 기준 + 미완료 구간 자동 보충)을 그대로 사용한다.
+// 요구사항(기간 검색, 2026-09-09 사용자 요청: "이날짜로 검색은 검색 기간을
+// 내가 설정하는거야"): body.startDate(YYYY-MM-DD)만 주면 그 하루만, startDate+
+// endDate를 함께 주면 그 기간(포함) 전체를 정확히 재검색한다. 둘 다 생략하면
+// 기존 자동 로직(전일 기준 + 미완료 구간 자동 보충)을 그대로 사용한다.
+const MAX_MANUAL_RANGE_DAYS = 31;
+
+function daysInclusive(startKey: string, endKey: string): number {
+  const start = new Date(`${startKey}T00:00:00Z`);
+  const end = new Date(`${endKey}T00:00:00Z`);
+  return Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+}
+
 router.post("/scans/run", async (req, res) => {
   const input = TriggerScanBody.safeParse(req.body ?? {});
   if (!input.success) {
     res.status(400).json({ error: "날짜 형식을 확인해 주세요 (YYYY-MM-DD)." });
     return;
   }
+  const { startDate, endDate } = input.data;
+  let explicitRange: { start: string; end: string } | undefined;
+  if (startDate) {
+    const rangeEnd = endDate || startDate;
+    if (rangeEnd < startDate) {
+      res.status(400).json({ error: "종료일이 시작일보다 빠를 수 없습니다." });
+      return;
+    }
+    if (daysInclusive(startDate, rangeEnd) > MAX_MANUAL_RANGE_DAYS) {
+      res.status(400).json({ error: `검색 기간은 최대 ${MAX_MANUAL_RANGE_DAYS}일까지 지정할 수 있습니다.` });
+      return;
+    }
+    explicitRange = { start: startDate, end: rangeEnd };
+  }
   try {
-    const run = await createPendingScanRun("manual", input.data.date);
+    const run = await createPendingScanRun("manual", explicitRange);
     void executeScanRun(run).catch((error) => {
       logger.error({ err: error, runId: run.id }, "Manual scan run failed");
     });
