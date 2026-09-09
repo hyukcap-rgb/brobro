@@ -866,11 +866,18 @@ components:
     TriggerScanInput:
       type: object
       properties:
-        date:
+        startDate:
           type: string
           description: >-
-            수동 검색 대상 날짜(YYYY-MM-DD, KST). 생략하면 기존 자동 로직(전일
+            수동 검색 대상 기간의 시작일(YYYY-MM-DD, KST). endDate 없이 이것만
+            주면 하루(startDate)만 검색한다. 둘 다 생략하면 기존 자동 로직(전일
             기준, 미완료 구간 자동 보충)을 그대로 사용한다.
+          pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        endDate:
+          type: string
+          description: >-
+            수동 검색 대상 기간의 종료일(YYYY-MM-DD, KST, 포함). startDate가
+            있어야 의미가 있다. 최대 31일 구간까지 허용한다.
           pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
       required: []
     ScanRun:
