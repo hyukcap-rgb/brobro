@@ -515,9 +515,11 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           for (const attachment of attachments) {
             let downloadedPath: string;
             try {
+              // 요구사항(첨부파일 보관, 2026-09-09): 일시적 네트워크 오류로 매칭
+              // 자체를 놓치는 일("누락")을 줄이기 위해 재시도 횟수를 2→3으로 상향.
               const download = await withRetry(
                 () => downloadAttachment(attachment.url, scratchDir, attachment.name),
-                2,
+                3,
               );
               downloadedPath = download.value;
             } catch (error) {
