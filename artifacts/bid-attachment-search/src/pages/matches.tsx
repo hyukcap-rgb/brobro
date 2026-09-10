@@ -277,108 +277,145 @@ export default function Matches() {
                 : "오늘 매칭된 결과가 아직 없습니다. 자동 검색은 매일 오전 7시에 실행됩니다."}
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-              {visibleMatches.map((match) => (
-                <div key={match.id} className="rounded-md border p-3 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-xs text-muted-foreground">{match.noticeNumber}</span>
-                    <span className="text-xs text-muted-foreground whitespace-nowrap">{match.awardDate ?? "-"}</span>
-                  </div>
-                  {/* 요구사항(2026-09-10 사용자 요청: "검색 결과에 키워드/수량을
-                  꼭 함께 넣어줘. 이게 가장 중요해. 이걸 한눈에 보고 해당 업체에
-                  연락을 하려는게 이 싸이트의 핵심이야"): 어떤 자재가 얼마나
-                  필요한지를 가장 먼저 눈에 띄게 보여준다. */}
-                  {match.matchedKeyword ? (
-                    <div className="flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-sm font-semibold text-primary">
-                      <Package className="h-4 w-4 shrink-0" />
-                      <span>{match.matchedKeyword}</span>
-                      {match.quantityText ? <span>· {match.quantityText}</span> : null}
-                    </div>
-                  ) : null}
-                  <div className="font-medium leading-snug">
-                    {match.bidderName ? (
-                      <a
-                        href={naverSearchHref(match.bidderName)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:underline hover:text-primary"
-                        title="네이버에서 전화번호 검색"
-                      >
-                        {match.bidderName}
-                      </a>
-                    ) : (
-                      "낙찰자 미확인"
-                    )}
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    규모 {formatAmount(match.budgetAmount ?? match.awardAmount)}
-                  </div>
-                  <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
-                    <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                    <span>{match.bidderAddress ?? "주소 미확인"}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 text-sm">
-                      <Phone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      {isUsablePhone(match.bidderPhone) ? (
-                        <a href={telHref(match.bidderPhone!)} className="text-primary hover:underline">
-                          {match.bidderPhone}
-                        </a>
-                      ) : (
-                        <span className="text-muted-foreground">
-                          {match.bidderPhone ? "번호 비공개(마스킹)" : "연락처 미확인"}
-                        </span>
-                      )}
-                      {!isUsablePhone(match.bidderPhone) ? (
-                        <button
-                          type="button"
-                          onClick={() => void handleRefreshContact(match.id)}
-                          disabled={refreshingContactId === match.id}
-                          className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50 shrink-0"
-                          title="네이버에서 전화번호 다시 찾기"
-                        >
-                          {refreshingContactId === match.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+            // 요구사항(2026-09-10 사용자 요청: "일일 검색결과가 박스형으로
+            // 되어 있어서 너무 보기 힘들어. 엑셀형으로 한줄 형태로 나타내줘"):
+            // 카드 그리드 대신 한 행 = 한 매칭 결과인 표 형태로 바꿔서 여러
+            // 건을 한 화면에서 스캔하며 비교하기 쉽게 한다.
+            <div className="overflow-x-auto rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>공고번호</TableHead>
+                    <TableHead>낙찰일</TableHead>
+                    <TableHead>키워드 · 수량</TableHead>
+                    <TableHead>낙찰자</TableHead>
+                    <TableHead>규모</TableHead>
+                    <TableHead>주소</TableHead>
+                    <TableHead>연락처</TableHead>
+                    <TableHead>출처</TableHead>
+                    <TableHead>첨부파일</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visibleMatches.map((match) => (
+                    <TableRow key={match.id}>
+                      <TableCell className="font-mono text-xs whitespace-nowrap">{match.noticeNumber}</TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">{match.awardDate ?? "-"}</TableCell>
+                      {/* 요구사항(2026-09-10 사용자 요청: "검색 결과에
+                      키워드/수량을 꼭 함께 넣어줘. 이게 가장 중요해. 이걸
+                      한눈에 보고 해당 업체에 연락을 하려는게 이 싸이트의
+                      핵심이야"): 어떤 자재가 얼마나 필요한지를 가장 먼저
+                      눈에 띄게 보여준다. */}
+                      <TableCell className="whitespace-nowrap">
+                        {match.matchedKeyword ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-sm font-semibold text-primary">
+                            <Package className="h-4 w-4 shrink-0" />
+                            <span>{match.matchedKeyword}</span>
+                            {match.quantityText ? <span>· {match.quantityText}</span> : null}
+                          </span>
+                        ) : (
+                          "-"
+                        )}
+                      </TableCell>
+                      <TableCell className="font-medium whitespace-nowrap">
+                        {match.bidderName ? (
+                          <a
+                            href={naverSearchHref(match.bidderName)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:underline hover:text-primary"
+                            title="네이버에서 전화번호 검색"
+                          >
+                            {match.bidderName}
+                          </a>
+                        ) : (
+                          "낙찰자 미확인"
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                        {formatAmount(match.budgetAmount ?? match.awardAmount)}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground max-w-[220px]">
+                        <div className="flex items-start gap-1.5">
+                          <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                          <span className="truncate" title={match.bidderAddress ?? undefined}>
+                            {match.bidderAddress ?? "주소 미확인"}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 text-sm">
+                          <Phone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          {isUsablePhone(match.bidderPhone) ? (
+                            <a href={telHref(match.bidderPhone!)} className="text-primary hover:underline">
+                              {match.bidderPhone}
+                            </a>
                           ) : (
-                            <Search className="h-3 w-3" />
+                            <span className="text-muted-foreground">
+                              {match.bidderPhone ? "번호 비공개(마스킹)" : "연락처 미확인"}
+                            </span>
                           )}
-                          다시 찾기
-                        </button>
-                      ) : null}
-                    </div>
-                    {contactSourceLabel(match.contactSource) ? (
-                      <Badge variant="outline" className="text-[10px] font-normal shrink-0">
-                        {contactSourceLabel(match.contactSource)}
-                      </Badge>
-                    ) : null}
-                  </div>
-                  {/* 요구사항(2026-09-10 사용자 요청 1, 2: "키워드가 나온 파일은
-                  다운로드 해서 우리 서버에 저장해줘" / "저장된 파일을 열어볼 수
-                  있도록 링크를 만들어줘"): 첨부파일은 daily-scan.ts가 매칭
-                  시점에 이미 서버(SCAN_ROOT)에 저장해두고 있었다 — 화면에서
-                  열어볼 수 있는 링크가 없었을 뿐이라 여기에 추가한다. */}
-                  {match.attachmentFileName ? (
-                    <div className="flex items-center gap-1.5 text-xs">
-                      <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      {match.attachmentDeletedAt ? (
-                        <span className="text-muted-foreground truncate" title={match.attachmentFileName}>
-                          {match.attachmentFileName} (보관기간 경과로 삭제됨)
-                        </span>
-                      ) : (
-                        <a
-                          href={`/api/matches/${match.id}/attachment`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline truncate"
-                          title="첨부파일 열기"
-                        >
-                          {match.attachmentFileName}
-                        </a>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
+                          {!isUsablePhone(match.bidderPhone) ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleRefreshContact(match.id)}
+                              disabled={refreshingContactId === match.id}
+                              className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50 shrink-0"
+                              title="네이버에서 전화번호 다시 찾기"
+                            >
+                              {refreshingContactId === match.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Search className="h-3 w-3" />
+                              )}
+                              다시 찾기
+                            </button>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {contactSourceLabel(match.contactSource) ? (
+                          <Badge variant="outline" className="text-[10px] font-normal">
+                            {contactSourceLabel(match.contactSource)}
+                          </Badge>
+                        ) : (
+                          "-"
+                        )}
+                      </TableCell>
+                      {/* 요구사항(2026-09-10 사용자 요청 1, 2: "키워드가 나온
+                      파일은 다운로드 해서 우리 서버에 저장해줘" / "저장된
+                      파일을 열어볼 수 있도록 링크를 만들어줘"): 첨부파일은
+                      daily-scan.ts가 매칭 시점에 이미 서버(SCAN_ROOT)에
+                      저장해두고 있었다 — 화면에서 열어볼 수 있는 링크가
+                      없었을 뿐이라 여기에 추가한다. */}
+                      <TableCell className="max-w-[200px]">
+                        {match.attachmentFileName ? (
+                          <div className="flex items-center gap-1.5 text-xs">
+                            <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            {match.attachmentDeletedAt ? (
+                              <span className="text-muted-foreground truncate" title={match.attachmentFileName}>
+                                {match.attachmentFileName} (보관기간 경과로 삭제됨)
+                              </span>
+                            ) : (
+                              <a
+                                href={`/api/matches/${match.id}/attachment`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:underline truncate"
+                                title="첨부파일 열기"
+                              >
+                                {match.attachmentFileName}
+                              </a>
+                            )}
+                          </div>
+                        ) : (
+                          "-"
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
           )}
         </CardContent>
