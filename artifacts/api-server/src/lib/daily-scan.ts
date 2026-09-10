@@ -242,9 +242,46 @@ async function fetchNoticeDetail(
     "type=json",
   ].join("&");
   const response = await requestBuffer(`${WORK_SOURCE_ENDPOINTS[source].detailUrl}?${query}`);
-  if (response.status < 200 || response.status >= 300) return null;
-  const payload = JSON.parse(response.body.toString("utf8")) as Record<string, unknown>;
+  if (response.status < 200 || response.status >= 300) {
+    // 원인 진단용 임시 로그(2026-09-10): "상세 조회가 전부 0건" 문제의 원인을
+    // 밝히기 위해, HTTP 오류인 경우 상태코드와 응답 본문 일부를 남긴다.
+    logger.warn(
+      { bidNtceNo, source, status: response.status, bodyHead: response.body.toString("utf8").slice(0, 300) },
+      "일별 스캔[진단]: 공고 상세 조회 HTTP 오류",
+    );
+    return null;
+  }
+  const bodyText = response.body.toString("utf8");
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(bodyText) as Record<string, unknown>;
+  } catch (error) {
+    // 원인 진단용 임시 로그(2026-09-10): data.go.kr가 트래픽 초과 등으로 JSON이
+    // 아닌 XML/HTML 오류 응답을 HTTP 200으로 내려주는 경우가 있어, 파싱 실패
+    // 시에도 원인을 알 수 있도록 본문 일부를 남긴다.
+    logger.warn(
+      { bidNtceNo, source, bodyHead: bodyText.slice(0, 300) },
+      "일별 스캔[진단]: 공고 상세 조회 응답이 JSON이 아님",
+    );
+    throw error;
+  }
   const items = normalizeItems(payload);
+  if (items.length === 0) {
+    // 원인 진단용 임시 로그(2026-09-10 사용자 리포트: "부직포 매칭이 하나도 안됨"):
+    // 상세 API가 HTTP 200 + 빈 items로 응답하는 경우(트래픽 초과 등 API 자체
+    // 오류를 본문에 담아 200으로 내려주는 케이스 포함)를 구분하기 위해 응답의
+    // header(resultCode/resultMsg 등)와 본문 일부를 남긴다.
+    const responseRoot = (payload.response ?? payload) as Record<string, unknown>;
+    logger.warn(
+      {
+        bidNtceNo,
+        source,
+        header: responseRoot.header ?? null,
+        bodyHead: bodyText.slice(0, 300),
+      },
+      "일별 스캔[진단]: 공고 상세 조회 결과가 0건",
+    );
+  }
   const wanted = Number.parseInt(bidNtceOrd, 10);
   return items.find((item) => Number(item.bidNtceOrd) === wanted) ?? items[0] ?? null;
 }
