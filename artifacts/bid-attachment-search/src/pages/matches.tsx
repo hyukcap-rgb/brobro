@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import {
-  Download, FileDown, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
+  Download, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
   MapPin, Phone, CalendarSearch, Search,
 } from "lucide-react";
 
@@ -114,9 +114,13 @@ export default function Matches() {
     { limit: 500 },
     { query: { queryKey: getListMatchesQueryKey({ limit: 500 }), refetchInterval: 30_000 } },
   );
+  // 요구사항(2026-09-10 사용자 요청: "검색 list 가 오래 쌓이면 아래로 너무
+  // 내려감... 최근 7개만 보여주고 나머지는 다 자동삭제해줘"): 서버가 최근 7건만
+  // 남기고 나머지는 자동 삭제하므로(daily-scan.ts의 pruneOldScanRuns 참고),
+  // 화면에서도 그에 맞춰 최근 7건만 조회한다.
   const scansQuery = useListScans(
-    { limit: 20 },
-    { query: { queryKey: getListScansQueryKey({ limit: 20 }), refetchInterval: 15_000 } },
+    { limit: 7 },
+    { query: { queryKey: getListScansQueryKey({ limit: 7 }), refetchInterval: 15_000 } },
   );
   const triggerScan = useTriggerScan();
 
@@ -128,10 +132,10 @@ export default function Matches() {
       { data: range ? range : {} },
       {
         onSuccess: () => {
-          void queryClient.invalidateQueries({ queryKey: getListScansQueryKey({ limit: 20 }) });
+          void queryClient.invalidateQueries({ queryKey: getListScansQueryKey({ limit: 7 }) });
           setTimeout(() => {
             void queryClient.invalidateQueries({ queryKey: getListMatchesQueryKey({ limit: 500 }) });
-            void queryClient.invalidateQueries({ queryKey: getListScansQueryKey({ limit: 20 }) });
+            void queryClient.invalidateQueries({ queryKey: getListScansQueryKey({ limit: 7 }) });
           }, 20_000);
         },
       },
@@ -178,7 +182,7 @@ export default function Matches() {
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-4">
           <div>
-            <CardTitle>누적 영업 리드 (부직포 매칭 낙찰 공고)</CardTitle>
+            <CardTitle>일일 검색 결과</CardTitle>
             <CardDescription>
               매일 오전 7시 자동 검색 결과가 여기 누적됩니다. 현장사무소로 직접 연락해 영업하세요.
             </CardDescription>
@@ -186,13 +190,6 @@ export default function Matches() {
           <div className="flex gap-2 shrink-0">
             <Button variant="outline" size="sm" onClick={() => void matchesQuery.refetch()}>
               <RefreshCw className="h-4 w-4" /> 새로고침
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleDownload("/api/matches/export.csv", "누적_낙찰검색결과.csv")}
-            >
-              <FileDown className="h-4 w-4" /> CSV
             </Button>
             <Button
               size="sm"
@@ -291,10 +288,11 @@ export default function Matches() {
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-4 flex-wrap">
           <div>
-            <CardTitle>자동 검색 실행 기록</CardTitle>
+            <CardTitle>자동검색</CardTitle>
             <CardDescription>
               매일 오전 7시(KST) 자동으로 전일 공고를 검색합니다. 필요하면 지금 바로 실행하거나, 원하는 기간을
-              직접 지정해 다시 검색해볼 수 있습니다 (시작일=종료일이면 하루만 검색).
+              직접 지정해 다시 검색해볼 수 있습니다 (시작일=종료일이면 하루만 검색). 아래 기록은 최근 7건만
+              보관되고 이전 기록은 자동 삭제됩니다.
             </CardDescription>
           </div>
           <div className="flex items-center gap-2 flex-wrap shrink-0">
