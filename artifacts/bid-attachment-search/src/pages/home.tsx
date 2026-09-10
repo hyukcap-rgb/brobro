@@ -1117,6 +1117,16 @@ export default function Home() {
                               </div>
                             </TableCell>
                             <TableCell className="align-top py-3">
+                              {/* 요구사항(2026-09-10 사용자 요청: "검색 결과에
+                              키워드/수량을 꼭 함께 넣어줘. 이게 가장 중요해 ...
+                              한눈에 보고 해당 업체에 연락을 하려는게 이
+                              싸이트의 핵심"): 어떤 키워드가 매칭됐는지를
+                              수량과 함께 바로 보여준다. */}
+                              {res.foundKeywords.length > 0 && (
+                                <div className="text-xs font-semibold text-foreground truncate max-w-[130px]">
+                                  {res.foundKeywords.join(', ')}
+                                </div>
+                              )}
                               {res.itemQuantity ? (
                                 <div className="flex items-center gap-1.5 text-xs">
                                   <Package className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
