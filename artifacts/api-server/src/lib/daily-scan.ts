@@ -1,7 +1,7 @@
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { copyFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray, notInArray } from "drizzle-orm";
 import { db, dailyScanRunsTable, awardedMatchesTable, type DailyScanRun } from "@workspace/db";
 import {
   requestBuffer,
@@ -394,6 +394,36 @@ function buildDateRange(startKey: string, endKey: string): KstDate[] {
   return dates;
 }
 
+// 요구사항(2026-09-10 사용자 요청: "검색 list 가 오래 쌓이면 아래로 너무
+// 내려감. 검색을 언제 했는지는 중요하지 않으니 결과 history는 없어도 됨.
+// 최근 7개만 보여주고 나머지는 다 자동삭제해줘"): 자동검색 실행 기록은 "언제
+// 검색했는지"만 남기는 로그라 오래될수록 볼 필요가 없다. 매 실행마다 최근
+// MAX_SCAN_RUN_HISTORY건만 남기고 더 오래된 기록은 지운다. 단, 그 기록에
+// 연결된 매칭 결과(누적 영업 리드)는 별개의 누적 데이터이므로 지우지 않고
+// scanRunId 연결만 끊는다.
+const MAX_SCAN_RUN_HISTORY = 7;
+
+async function pruneOldScanRuns(): Promise<void> {
+  const recent = await db
+    .select({ id: dailyScanRunsTable.id })
+    .from(dailyScanRunsTable)
+    .orderBy(desc(dailyScanRunsTable.startedAt))
+    .limit(MAX_SCAN_RUN_HISTORY);
+  const keepIds = recent.map((row) => row.id);
+  if (keepIds.length === 0) return;
+  const stale = await db
+    .select({ id: dailyScanRunsTable.id })
+    .from(dailyScanRunsTable)
+    .where(notInArray(dailyScanRunsTable.id, keepIds));
+  const staleIds = stale.map((row) => row.id);
+  if (staleIds.length === 0) return;
+  await db
+    .update(awardedMatchesTable)
+    .set({ scanRunId: null })
+    .where(inArray(awardedMatchesTable.scanRunId, staleIds));
+  await db.delete(dailyScanRunsTable).where(inArray(dailyScanRunsTable.id, staleIds));
+}
+
 // 스캔 실행 기록만 즉시 만들어 반환한다 (수동 트리거 API가 바로 202로 응답할 수
 // 있도록). 실제 스캔은 executeScanRun에서 진행되며 몇 분씩 걸릴 수 있다.
 export async function createPendingScanRun(
@@ -408,6 +438,9 @@ export async function createPendingScanRun(
     .values({ targetDates: targetDates.map((d) => d.key), status: "running", triggerType })
     .returning();
   if (!run) throw new Error("스캔 작업을 생성하지 못했습니다.");
+  await pruneOldScanRuns().catch((error) => {
+    logger.warn({ err: error }, "Failed to prune old scan run history");
+  });
   return run;
 }
 
