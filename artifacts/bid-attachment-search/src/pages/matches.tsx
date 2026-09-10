@@ -144,6 +144,12 @@ export default function Matches() {
 
   const rangeInvalid = !startDate || !endDate || endDate < startDate;
 
+  // 요구사항(2026-09-10 사용자 문의: "대상일 기간이 이상하게 나오는데?"): "지금
+  // 실행" 버튼은 이름과 달리 어제 하루만 검색하지 않는다 — 나라장터 최종낙찰자
+  // 확정이 개찰일 이후에도 며칠씩 늦게 반영되는 것을 놓치지 않도록, 2026-09-08
+  // 요청에 따라 매번 최근 3일(RECHECK_WINDOW_DAYS, daily-scan.ts 참고)을 항상
+  // 다시 확인한다. 그래서 화면의 "대상일"에 날짜가 여러 개 찍히는 것이 정상
+  // 동작이다 — 버튼 이름을 실제 동작에 맞게 명확히 표기한다(아래 라벨 참고).
   const handleRunNow = () => runScan();
   const handleRunForRange = () => {
     if (rangeInvalid) return;
@@ -291,8 +297,9 @@ export default function Matches() {
             <CardTitle>자동검색</CardTitle>
             <CardDescription>
               매일 오전 7시(KST) 자동으로 전일 공고를 검색합니다. 필요하면 지금 바로 실행하거나, 원하는 기간을
-              직접 지정해 다시 검색해볼 수 있습니다 (시작일=종료일이면 하루만 검색). 아래 기록은 최근 7건만
-              보관되고 이전 기록은 자동 삭제됩니다.
+              직접 지정해 다시 검색해볼 수 있습니다 (시작일=종료일이면 하루만 검색). "지금 실행"은 낙찰
+              확정이 며칠씩 늦어지는 경우를 놓치지 않도록 최근 3일을 항상 다시 확인합니다. 아래 기록은
+              최근 7건만 보관되고 이전 기록은 자동 삭제됩니다.
             </CardDescription>
           </div>
           <div className="flex items-center gap-2 flex-wrap shrink-0">
@@ -322,7 +329,7 @@ export default function Matches() {
             </Button>
             <Button size="sm" onClick={handleRunNow} disabled={triggerScan.isPending}>
               {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
-              지금 실행 (전일)
+              지금 실행 (최근 3일 재확인)
             </Button>
           </div>
         </CardHeader>
