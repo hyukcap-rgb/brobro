@@ -50,6 +50,10 @@ function contactSourceLabel(source: string | null | undefined): string | null {
   if (source === "government") return "정부 낙찰기록";
   if (source === "attachment") return "첨부파일에서 추출";
   if (source === "portal") return "포털 검색 보완";
+  // 요구사항(전화번호 검색 보완, 2026-09-09): 네이버 웹문서/블로그 검색결과
+  // 텍스트에서 정규식으로 뽑아낸 번호라 지역검색(portal)보다 정확도가 낮으므로
+  // "추정"이라고 명시해 화면에서 신뢰도를 구분할 수 있게 한다.
+  if (source === "web") return "웹 검색 추정(확인 필요)";
   return null;
 }
 
