@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import {
   Download, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
-  MapPin, Phone, CalendarSearch, Search, Paperclip, X, ListFilter,
+  MapPin, Phone, CalendarSearch, Search, Paperclip, X, ListFilter, Package,
 } from "lucide-react";
 
 // KST(Asia/Seoul) 기준 "어제" 날짜를 YYYY-MM-DD로 반환한다. 서버의 자동 검색과
@@ -284,6 +284,17 @@ export default function Matches() {
                     <span className="font-mono text-xs text-muted-foreground">{match.noticeNumber}</span>
                     <span className="text-xs text-muted-foreground whitespace-nowrap">{match.awardDate ?? "-"}</span>
                   </div>
+                  {/* 요구사항(2026-09-10 사용자 요청: "검색 결과에 키워드/수량을
+                  꼭 함께 넣어줘. 이게 가장 중요해. 이걸 한눈에 보고 해당 업체에
+                  연락을 하려는게 이 싸이트의 핵심이야"): 어떤 자재가 얼마나
+                  필요한지를 가장 먼저 눈에 띄게 보여준다. */}
+                  {match.matchedKeyword ? (
+                    <div className="flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-sm font-semibold text-primary">
+                      <Package className="h-4 w-4 shrink-0" />
+                      <span>{match.matchedKeyword}</span>
+                      {match.quantityText ? <span>· {match.quantityText}</span> : null}
+                    </div>
+                  ) : null}
                   <div className="font-medium leading-snug">
                     {match.bidderName ? (
                       <a
