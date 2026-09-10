@@ -1796,6 +1796,26 @@ export async function getCollectionJob(jobId: string): Promise<CollectionJob | n
   }
 }
 
+// 요구사항(2026-09-10 사용자 요청: "우선 지금 test로 되어있는 결과값들은 모두
+// 삭제해줘"): /search 화면에서 배포 확인차 만들었던 검색 작업들을 한 번에
+// 정리하는 일회성 전체 삭제. 디스크에 저장된 작업 디렉터리와 인메모리 캐시를
+// 모두 비운다.
+export async function deleteAllJobs(): Promise<{ deletedCount: number }> {
+  jobs.clear();
+  let deletedCount = 0;
+  try {
+    const entries = await readdir(JOB_ROOT, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      await rm(path.join(JOB_ROOT, entry.name), { recursive: true, force: true });
+      deletedCount += 1;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+  }
+  return { deletedCount };
+}
+
 export async function buildArchive(job: CollectionJob): Promise<string> {
   const archivePath = path.join(jobDirectory(job.jobId), "나라장터_공고첨부파일.zip");
   await rm(archivePath, { force: true });
