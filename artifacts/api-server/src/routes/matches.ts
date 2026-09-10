@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { DownloadMatchAttachmentParams, ListMatchesQueryParams } from "@workspace/api-zod";
-import { buildMatchesCsv, buildMatchesXlsx, listAwardedMatches, sendDownload } from "../lib/matches-store";
+import { buildMatchesXlsx, listAwardedMatches, sendDownload } from "../lib/matches-store";
 import { resolveMatchAttachmentPath } from "../lib/scan-storage";
 import { searchBusinessContactOnPortal, searchBusinessContactOnWeb } from "../lib/bid-processing";
 import { db, awardedMatchesTable } from "@workspace/db";
@@ -28,16 +28,8 @@ router.get("/matches", async (req, res) => {
   res.json({ matches: matches.map(serializeMatch) });
 });
 
-router.get("/matches/export.csv", async (_req, res) => {
-  const matches = await listAwardedMatches(5000);
-  res.type("text/csv; charset=utf-8");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename*=UTF-8''${encodeURIComponent("누적_낙찰검색결과.csv")}`,
-  );
-  res.send(buildMatchesCsv(matches));
-});
-
+// 요구사항(2026-09-10 사용자 요청: "csv 다운로드는 없어도 돼. 헷갈려"): 엑셀
+// 다운로드 하나만 남기고 CSV 다운로드는 제거한다.
 router.get("/matches/export.xlsx", async (_req, res) => {
   try {
     const matches = await listAwardedMatches(5000);
