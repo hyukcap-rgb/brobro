@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { GetScanParams, ListScansQueryParams, TriggerScanBody } from "@workspace/api-zod";
-import { getScanRun, listScanRuns } from "../lib/matches-store";
+import { deleteAllScanData, getScanRun, listScanRuns } from "../lib/matches-store";
 import { createPendingScanRun, executeScanRun } from "../lib/daily-scan";
 import { logger } from "../lib/logger";
 
@@ -19,6 +19,15 @@ router.get("/scans", async (req, res) => {
   const limit = params.success ? params.data.limit : undefined;
   const scans = await listScanRuns(limit);
   res.json({ scans: scans.map(serializeRun) });
+});
+
+// 요구사항(2026-09-10 사용자 요청: "우선 지금 test로 되어있는 결과값들은 모두
+// 삭제해줘"): 배포 확인용으로 수동 실행했던 스캔 기록 + 그로 인한 매칭 결과를
+// 한 번에 정리하는 일회성 전체 삭제. 화면 버튼은 만들지 않고 관리자가 필요할
+// 때 직접 호출한다.
+router.delete("/scans", async (_req, res) => {
+  const result = await deleteAllScanData();
+  res.json(result);
 });
 
 router.get("/scans/:id", async (req, res) => {
