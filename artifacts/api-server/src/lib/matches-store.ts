@@ -38,6 +38,7 @@ const CONTACT_SOURCE_LABELS: Record<string, string> = {
   government: "정부 낙찰기록",
   attachment: "첨부파일에서 추출",
   portal: "포털 검색 보완",
+  web: "웹 검색 추정(확인 필요)",
 };
 
 function matchRow(match: AwardedMatch): string[] {
