@@ -65,16 +65,6 @@ function matchRow(match: AwardedMatch): string[] {
   ];
 }
 
-function csvEscape(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
-}
-
-export function buildMatchesCsv(matches: AwardedMatch[]): string {
-  const rows = [MATCH_HEADERS, ...matches.map(matchRow)];
-  return `﻿${rows.map((row) => row.map(csvEscape).join(",")).join("\r\n")}`;
-}
-
 function xmlEscape(value: unknown): string {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
