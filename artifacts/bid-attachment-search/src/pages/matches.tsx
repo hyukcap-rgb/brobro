@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   useListMatches,
   useListScans,
@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import {
   Download, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
-  MapPin, Phone, CalendarSearch, Search,
+  MapPin, Phone, CalendarSearch, Search, Paperclip, X, ListFilter,
 } from "lucide-react";
 
 // KST(Asia/Seoul) 기준 "어제" 날짜를 YYYY-MM-DD로 반환한다. 서버의 자동 검색과
@@ -30,6 +30,27 @@ function getKstYesterdayKey(): string {
   }).formatToParts(now);
   const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${lookup.year}-${lookup.month}-${lookup.day}`;
+}
+
+// 요구사항(2026-09-10 사용자 요청: "검색결과가 쌓이게 되면 리스트가 보기
+// 어려워질꺼같아... 검색 결과는 날짜가 바뀌면 자동으로 삭제 해줘"): 데이터
+// 자체는 지우지 않고 그대로 보존한다(엑셀 다운로드로 언제든 전체 누적 내역을
+// 받을 수 있음) — 대신 화면의 "일일 검색 결과" 카드에는 오늘(KST) 생성된
+// 결과만 걸러서 보여준다. 이 값은 렌더링마다 새로 계산되므로 자정이 지나면
+// (matchesQuery가 30초마다 다시 불러오는 시점에) 화면이 자동으로 갱신된다.
+function getKstDateKeyFromIso(iso: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(iso));
+  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${lookup.year}-${lookup.month}-${lookup.day}`;
+}
+
+function getKstTodayKey(): string {
+  return getKstDateKeyFromIso(new Date().toISOString());
 }
 
 function formatDateTime(value: string | null | undefined): string {
@@ -127,6 +148,23 @@ export default function Matches() {
   const matches = matchesQuery.data?.matches ?? [];
   const scans = scansQuery.data?.scans ?? [];
 
+  // 요구사항(2026-09-10 사용자 요청 4: "자동검색에서 매칭건수를 클릭하면 위에
+  // 검색결과에 해당 검색결과를 보여주는 방식으로 수정하자"): 실행 기록의 매칭
+  // 건수를 클릭하면 그 실행(scanRunId)에서 나온 결과만 위 카드에 걸러서
+  // 보여준다. 선택을 해제하면 요구사항 3의 기본값(오늘 결과만)으로 돌아간다.
+  const [selectedScanRunId, setSelectedScanRunId] = useState<number | null>(null);
+  const selectedScan = selectedScanRunId != null ? (scans.find((scan) => scan.id === selectedScanRunId) ?? null) : null;
+  const todayKey = getKstTodayKey();
+  const visibleMatches =
+    selectedScanRunId != null
+      ? matches.filter((match) => match.scanRunId === selectedScanRunId)
+      : matches.filter((match) => getKstDateKeyFromIso(match.createdAt) === todayKey);
+  const matchesCardRef = useRef<HTMLDivElement>(null);
+  const handleSelectScanRun = (scanId: number) => {
+    setSelectedScanRunId((current) => (current === scanId ? null : scanId));
+    matchesCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const runScan = (range?: { startDate: string; endDate: string }) => {
     triggerScan.mutate(
       { data: range ? range : {} },
@@ -185,15 +223,32 @@ export default function Matches() {
 
   return (
     <div className="mx-auto max-w-7xl p-6 space-y-6">
-      <Card>
+      <Card ref={matchesCardRef}>
         <CardHeader className="flex flex-row items-start justify-between gap-4">
           <div>
             <CardTitle>일일 검색 결과</CardTitle>
             <CardDescription>
-              매일 오전 7시 자동 검색 결과가 여기 누적됩니다. 현장사무소로 직접 연락해 영업하세요.
+              {selectedScan ? (
+                <>
+                  <ListFilter className="inline h-3.5 w-3.5 mr-1 align-text-bottom" />
+                  실행 기록 하나(대상일 {selectedScan.targetDates.join(", ")}, {formatDateTime(selectedScan.startedAt)})의
+                  매칭 결과만 걸러서 보고 있습니다. 오른쪽의 "필터 해제"를 누르면 오늘 결과로 돌아갑니다.
+                </>
+              ) : (
+                <>
+                  매일 오전 7시 자동 검색 결과가 여기 누적됩니다. 화면에는 오늘 찾은 결과만 표시되고, 지난 결과는 지워지지
+                  않고 계속 쌓입니다 — 지난 결과 전체는 "엑셀 다운로드"로 받아보거나, 아래 "자동검색" 실행 기록의 매칭
+                  건수를 클릭해 확인할 수 있습니다. 현장사무소로 직접 연락해 영업하세요.
+                </>
+              )}
             </CardDescription>
           </div>
           <div className="flex gap-2 shrink-0">
+            {selectedScan ? (
+              <Button variant="outline" size="sm" onClick={() => setSelectedScanRunId(null)}>
+                <X className="h-4 w-4" /> 필터 해제
+              </Button>
+            ) : null}
             <Button variant="outline" size="sm" onClick={() => void matchesQuery.refetch()}>
               <RefreshCw className="h-4 w-4" /> 새로고침
             </Button>
@@ -215,13 +270,15 @@ export default function Matches() {
             <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
               <Loader2 className="h-4 w-4 animate-spin" /> 불러오는 중...
             </div>
-          ) : matches.length === 0 ? (
+          ) : visibleMatches.length === 0 ? (
             <div className="text-sm text-muted-foreground py-8 text-center">
-              아직 매칭된 결과가 없습니다. 자동 검색은 매일 오전 7시에 실행됩니다.
+              {selectedScan
+                ? "이 실행에서 매칭된 결과가 없습니다."
+                : "오늘 매칭된 결과가 아직 없습니다. 자동 검색은 매일 오전 7시에 실행됩니다."}
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-              {matches.map((match) => (
+              {visibleMatches.map((match) => (
                 <div key={match.id} className="rounded-md border p-3 space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-mono text-xs text-muted-foreground">{match.noticeNumber}</span>
@@ -284,6 +341,31 @@ export default function Matches() {
                       </Badge>
                     ) : null}
                   </div>
+                  {/* 요구사항(2026-09-10 사용자 요청 1, 2: "키워드가 나온 파일은
+                  다운로드 해서 우리 서버에 저장해줘" / "저장된 파일을 열어볼 수
+                  있도록 링크를 만들어줘"): 첨부파일은 daily-scan.ts가 매칭
+                  시점에 이미 서버(SCAN_ROOT)에 저장해두고 있었다 — 화면에서
+                  열어볼 수 있는 링크가 없었을 뿐이라 여기에 추가한다. */}
+                  {match.attachmentFileName ? (
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      {match.attachmentDeletedAt ? (
+                        <span className="text-muted-foreground truncate" title={match.attachmentFileName}>
+                          {match.attachmentFileName} (보관기간 경과로 삭제됨)
+                        </span>
+                      ) : (
+                        <a
+                          href={`/api/matches/${match.id}/attachment`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline truncate"
+                          title="첨부파일 열기"
+                        >
+                          {match.attachmentFileName}
+                        </a>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -358,13 +440,30 @@ export default function Matches() {
                 </TableHeader>
                 <TableBody>
                   {scans.map((scan) => (
-                    <TableRow key={scan.id}>
+                    <TableRow key={scan.id} className={scan.id === selectedScanRunId ? "bg-muted/50" : undefined}>
                       <TableCell>{scanStatusBadge(scan.status)}</TableCell>
                       <TableCell className="text-xs">{scan.targetDates.join(", ")}</TableCell>
                       <TableCell className="text-xs">{scan.triggerType === "manual" ? "수동" : "자동"}</TableCell>
                       <TableCell>{scan.awardsFound}</TableCell>
                       <TableCell>{scan.candidatesChecked}</TableCell>
-                      <TableCell className="font-medium">{scan.matchesFound}</TableCell>
+                      <TableCell className="font-medium">
+                        {/* 요구사항(2026-09-10 사용자 요청 4: "자동검색에서
+                        매칭건수를 클릭하면 위에 검색결과에 해당 검색결과를
+                        보여주는 방식으로 수정하자") */}
+                        {scan.matchesFound > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => handleSelectScanRun(scan.id)}
+                            className="inline-flex items-center gap-1 text-primary hover:underline"
+                            title="이 실행의 매칭 결과만 위에서 보기"
+                          >
+                            <ListFilter className="h-3 w-3" />
+                            {scan.matchesFound}
+                          </button>
+                        ) : (
+                          scan.matchesFound
+                        )}
+                      </TableCell>
                       <TableCell className="text-xs whitespace-nowrap">{formatDateTime(scan.startedAt)}</TableCell>
                       <TableCell className="max-w-xs text-xs text-destructive">{scan.errorMessage ?? "-"}</TableCell>
                     </TableRow>
