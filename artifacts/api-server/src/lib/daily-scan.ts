@@ -31,6 +31,32 @@ import { logger } from "./logger";
 // 공백은 매일 조금씩 나눠서 채워지고, 로그에 경고를 남긴다.
 const MAX_GAP_FILL_DAYS = 14;
 
+// 요구사항(2026-09-10 사용자 리포트: "부직포 매칭이 하나도 안됨 — 아까는 많았는데"):
+// 원인을 로그로 추적해보니 실제로는 버그가 아니라 data.go.kr(공공데이터포털)의
+// "일일 서비스 요청제한 횟수 초과"(LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR,
+// HTTP 429) 였다 — 공고 상세 조회가 전부 이 오류로 실패해 첨부파일 검색 자체를
+// 시작하지 못했다. 이 상태를 일반적인 "공고 상세 없음"과 구분해서 화면(오류 컬럼)에
+// 명확히 알려주기 위한 전용 에러 타입과 감지 함수.
+class QuotaExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QuotaExceededError";
+  }
+}
+
+function extractOpenApiErrorMessage(bodyText: string): string | null {
+  try {
+    const parsed = JSON.parse(bodyText) as Record<string, unknown>;
+    const envelope = parsed.OpenAPI_ServiceResponse as Record<string, unknown> | undefined;
+    const header = envelope?.cmmMsgHeader as Record<string, unknown> | undefined;
+    if (header?.errMsg) return String(header.errMsg);
+  } catch {
+    // 아래 XML 폴백으로 계속 진행.
+  }
+  const xmlMatch = /<errMsg>([^<]+)<\/errMsg>/i.exec(bodyText);
+  return xmlMatch ? xmlMatch[1] : null;
+}
+
 // 요구사항(재확인, 2026-09-08 사용자 확인): 나라장터의 "최종낙찰자" 데이터는
 // 개찰일이 지나도 몇 시간~며칠에 걸쳐 점진적으로 확정되어, 이미 "완료"로 기록된
 // 날짜라도 다시 스캔하면 새로 확정된 낙찰건이 추가로 나타날 수 있다. 기존
@@ -243,12 +269,17 @@ async function fetchNoticeDetail(
   ].join("&");
   const response = await requestBuffer(`${WORK_SOURCE_ENDPOINTS[source].detailUrl}?${query}`);
   if (response.status < 200 || response.status >= 300) {
+    const bodyText = response.body.toString("utf8");
     // 원인 진단용 임시 로그(2026-09-10): "상세 조회가 전부 0건" 문제의 원인을
     // 밝히기 위해, HTTP 오류인 경우 상태코드와 응답 본문 일부를 남긴다.
     logger.warn(
-      { bidNtceNo, source, status: response.status, bodyHead: response.body.toString("utf8").slice(0, 300) },
+      { bidNtceNo, source, status: response.status, bodyHead: bodyText.slice(0, 300) },
       "일별 스캔[진단]: 공고 상세 조회 HTTP 오류",
     );
+    const apiErrMsg = extractOpenApiErrorMessage(bodyText);
+    if (apiErrMsg === "LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR") {
+      throw new QuotaExceededError("공공데이터포털 일일 호출 한도를 초과했습니다.");
+    }
     return null;
   }
   const bodyText = response.body.toString("utf8");
@@ -503,6 +534,9 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
     skippedWorkType: 0,
     noAttachmentUrl: 0,
     reachedAttachmentSearch: 0,
+    // 요구사항(2026-09-10 사용자 리포트: "부직포 매칭이 하나도 안됨"): data.go.kr
+    // 일일 호출 한도 초과로 상세 조회 자체가 실패한 건수를 별도로 센다.
+    quotaExceeded: 0,
   };
 
   // 같은 낙찰자가 여러 건 매칭되면(같은 공고의 여러 첨부파일, 또는 여러 공고를
@@ -561,6 +595,10 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           const lookup = await withRetry(() => fetchNoticeDetail(bidNtceNo, bidNtceOrd, source), 2);
           detail = lookup.value;
         } catch (error) {
+          if (error instanceof QuotaExceededError) {
+            funnel.quotaExceeded += 1;
+            continue;
+          }
           logger.warn({ err: error, noticeNumber, source }, "일별 스캔: 공고 상세 조회 실패");
           continue;
         }
@@ -773,9 +811,17 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
       "일별 스캔[진단]: 후보 필터링 단계별 요약",
     );
 
+    // 요구사항(2026-09-10 사용자 리포트: "부직포 매칭이 하나도 안됨 — 아까는
+    // 많았는데"): data.go.kr 일일 호출 한도 초과로 상세 조회 자체가 실패하면
+    // 매칭 결과가 조용히 0건이 되어 "진짜로 해당 키워드가 없다"와 구분이 안
+    // 됐다. 화면의 "오류" 컬럼에 원인을 명확히 남겨 혼동을 막는다.
+    const errorMessage =
+      funnel.quotaExceeded > 0
+        ? `공공데이터포털(data.go.kr) 일일 호출 한도 초과로 ${funnel.quotaExceeded}건의 공고 상세를 확인하지 못했습니다. 보통 자정(KST) 이후 한도가 초기화되니 내일 다시 확인해 주세요.`
+        : null;
     const [completed] = await db
       .update(dailyScanRunsTable)
-      .set({ status: "completed", awardsFound, candidatesChecked, matchesFound, finishedAt: new Date() })
+      .set({ status: "completed", awardsFound, candidatesChecked, matchesFound, finishedAt: new Date(), errorMessage })
       .where(eq(dailyScanRunsTable.id, run.id))
       .returning();
     return completed ?? run;
