@@ -28,6 +28,29 @@ export async function getScanRun(id: number): Promise<DailyScanRun | null> {
   return run ?? null;
 }
 
+// 요구사항(2026-09-10 사용자 요청: "우선 지금 test로 되어있는 결과값들은 모두
+// 삭제해줘"): 배포 확인차 수동으로 돌려본 스캔 실행 기록과 그로 인해 저장된
+// 매칭 결과를 한 번에 정리하기 위한 전체 삭제. 실제 운영 데이터가 쌓이기 전,
+// 일회성 초기화 용도이므로 화면에는 버튼을 따로 만들지 않는다.
+export async function deleteAllScanData(): Promise<{ deletedMatches: number; deletedRuns: number }> {
+  const matches = await db
+    .select({ id: awardedMatchesTable.id, attachmentStoredPath: awardedMatchesTable.attachmentStoredPath })
+    .from(awardedMatchesTable);
+  const { SCAN_ROOT } = await import("./scan-storage");
+  for (const match of matches) {
+    if (!match.attachmentStoredPath) continue;
+    try {
+      const filePath = path.resolve(SCAN_ROOT, match.attachmentStoredPath);
+      await rm(filePath, { force: true });
+    } catch {
+      // 파일이 이미 없거나 삭제 실패해도 레코드 삭제는 계속 진행한다.
+    }
+  }
+  const deletedMatches = await db.delete(awardedMatchesTable).returning({ id: awardedMatchesTable.id });
+  const deletedRuns = await db.delete(dailyScanRunsTable).returning({ id: dailyScanRunsTable.id });
+  return { deletedMatches: deletedMatches.length, deletedRuns: deletedRuns.length };
+}
+
 const MATCH_HEADERS = [
   "공고번호", "현장명(공고명)", "발주기관", "업무구분", "공종", "낙찰자", "사업자등록번호",
   "낙찰자 주소", "낙찰자 전화", "연락처 출처", "현장사무소", "부직포 수량",
