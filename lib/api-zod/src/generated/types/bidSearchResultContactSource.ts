@@ -16,4 +16,5 @@ export const BidSearchResultContactSource = {
   government: 'government',
   attachment: 'attachment',
   portal: 'portal',
+  web: 'web',
 } as const;
