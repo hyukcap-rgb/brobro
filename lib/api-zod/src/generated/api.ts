@@ -123,6 +123,7 @@ export const ListMatchesResponse = zod.object({
   "surroundingText": zod.string().nullish(),
   "attachmentFileName": zod.string().nullish(),
   "attachmentStoredPath": zod.string().nullish(),
+  "attachmentDeletedAt": zod.string().nullish().describe('보관기간(5개월) 경과로 첨부파일 실물이 자동 삭제된 시각. 값이 있으면 다운로드 링크를 비활성화해야 함.'),
   "createdAt": zod.string()
 }))
 })
