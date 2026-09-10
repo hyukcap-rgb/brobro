@@ -18,7 +18,14 @@ function isUsablePhone(value: string | null | undefined): boolean {
 const router: IRouter = Router();
 
 function serializeMatch(match: Awaited<ReturnType<typeof listAwardedMatches>>[number]) {
-  return { ...match, createdAt: match.createdAt.toISOString() };
+  return {
+    ...match,
+    createdAt: match.createdAt.toISOString(),
+    // 요구사항(2026-09-10 사용자 요청 2: "서버에 저장된 파일을 열어볼 수 있도록
+    // 링크를 만들어줘"): 화면에서 다운로드 링크를 보여줄지 판단할 수 있도록
+    // 보관기간(5개월) 경과 삭제 여부도 함께 내려준다.
+    attachmentDeletedAt: match.attachmentDeletedAt ? match.attachmentDeletedAt.toISOString() : null,
+  };
 }
 
 router.get("/matches", async (req, res) => {
