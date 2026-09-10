@@ -270,7 +270,7 @@ export interface SearchResult {
   baseAmount?: string;
   constructionOverview?: string;
   awardStatus?: "confirmed" | "not_found";
-  contactSource?: "government" | "attachment" | "portal";
+  contactSource?: "government" | "attachment" | "portal" | "web";
 }
 
 export interface AttachmentResult {
@@ -660,20 +660,39 @@ async function findBusinessContactInAttachments(
   return {};
 }
 
+// 요구사항(전화번호 정확도 보완, 2026-09-09 사용자 리포트: "회사이름과 주소를
+// 교차검증하면 전화번호를 정확히 찾을 수 있을 것 같아"): 회사명만으로 검색하면
+// 전국에 같은/비슷한 이름의 다른 업체가 걸려 엉뚱한 번호를 가져올 수 있다.
+// 이미 알고 있는 주소(정부 낙찰기록·첨부파일 등에서)가 있으면 "시/도 + 시/군/구"
+// 정도의 지역명을 뽑아 검색어에 더해 같은 지역의 업체를 우선하도록 돕는다.
+function regionHint(address: string | null | undefined): string | null {
+  if (!address) return null;
+  const match = address
+    .trim()
+    .match(/^(\S+(?:특별시|광역시|특별자치시|특별자치도|도))\s+(\S+(?:시|군|구))/);
+  return match ? `${match[1]} ${match[2]}` : null;
+}
+
 // Naver's 지역검색(Local Search) open API: given a business name, returns its
 // road address and listed phone number. Free tier (NAVER_CLIENT_ID /
 // NAVER_CLIENT_SECRET, see replit.md) — used only as a last resort when
 // neither the government award record nor the notice's attachments have
-// contact details for the winning bidder.
+// contact details for the winning bidder. When a known address is passed in,
+// its region is added to the query and cross-checked against the result's
+// address so a same-named business in a different city isn't mistaken for
+// the real one.
 export async function searchBusinessContactOnPortal(
   companyName: string,
+  knownAddress?: string | null,
 ): Promise<{ address?: string; phone?: string } | null> {
   const clientId = process.env.NAVER_CLIENT_ID;
   const clientSecret = process.env.NAVER_CLIENT_SECRET;
   const trimmedName = companyName.trim();
   if (!clientId || !clientSecret || !trimmedName || trimmedName === "미공개/확인불가") return null;
+  const region = regionHint(knownAddress);
+  const query = region ? `${trimmedName} ${region}` : trimmedName;
   try {
-    const url = `https://openapi.naver.com/v1/search/local.json?query=${encodeURIComponent(trimmedName)}&display=1`;
+    const url = `https://openapi.naver.com/v1/search/local.json?query=${encodeURIComponent(query)}&display=1`;
     const response = await fetch(url, {
       headers: {
         "X-Naver-Client-Id": clientId,
@@ -681,7 +700,15 @@ export async function searchBusinessContactOnPortal(
       },
       signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // 200이 아니면 "결과 없음"이 아니라 인증/한도 문제일 수 있으므로, 화면에서는
+      // 조용히 넘어가더라도 로그에는 원인 파악용으로 상태코드를 남긴다.
+      logger.warn(
+        { status: response.status, statusText: response.statusText, companyName: trimmedName },
+        "Naver local search returned a non-OK response",
+      );
+      return null;
+    }
     const payload = (await response.json()) as {
       items?: { address?: string; roadAddress?: string; telephone?: string }[];
     };
@@ -690,14 +717,100 @@ export async function searchBusinessContactOnPortal(
     const address = (item.roadAddress || item.address || "").trim();
     const phone = (item.telephone || "").trim();
     if (!address && !phone) return null;
+    // 지역을 알고 있는데 검색 결과 주소가 그 지역이 아니면(동명 다른 업체일 가능성),
+    // 전화번호는 신뢰하지 않고 주소만(있다면) 참고용으로 남긴다.
+    const regionMismatch = Boolean(region && address && !address.includes(region.split(" ")[1] ?? region));
     const found: { address?: string; phone?: string } = {};
     if (address) found.address = address;
-    if (phone) found.phone = phone;
-    return found;
+    if (phone && !regionMismatch) found.phone = phone;
+    return address || found.phone ? found : null;
   } catch (error) {
     logger.warn({ err: error, companyName: trimmedName }, "Naver local search failed");
     return null;
   }
+}
+
+// 요구사항(전화번호 검색 보완, 2026-09-09 사용자 리포트: "너가 생각했을 때
+// 내가 전화번호를 찾아내고 싶어. 방법을 만들어봐"): 네이버 지역검색(Local
+// Search)은 "스마트플레이스"에 등록된 업체(주로 식당/매장)만 색인하기 때문에
+// 협동조합·비영리단체 같은 곳은 검색해도 안 나온다(명문사회적협동조합 사례로
+// 확인됨). 같은 NAVER_CLIENT_ID/SECRET으로 쓸 수 있는 네이버 웹문서/블로그
+// 검색 API는 훨씬 넓은 범위를 색인하므로, 회사명이 실제로 언급된 검색결과
+// 스니펫에서 전화번호 패턴을 정규식으로 추출해 최후의 보완 수단으로 쓴다.
+// 정확도가 구조화된 지역검색보다는 낮으므로 contactSource를 "web"으로 따로
+// 표시해 화면에서 구분한다.
+function stripHtml(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, "")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#39;/g, "'");
+}
+
+async function searchNaverText(
+  endpoint: "webkr" | "blog",
+  query: string,
+): Promise<{ title: string; description: string }[]> {
+  const clientId = process.env.NAVER_CLIENT_ID;
+  const clientSecret = process.env.NAVER_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return [];
+  try {
+    const url = `https://openapi.naver.com/v1/search/${endpoint}.json?query=${encodeURIComponent(query)}&display=5`;
+    const response = await fetch(url, {
+      headers: {
+        "X-Naver-Client-Id": clientId,
+        "X-Naver-Client-Secret": clientSecret,
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      logger.warn(
+        { status: response.status, statusText: response.statusText, endpoint, query },
+        "Naver text search returned a non-OK response",
+      );
+      return [];
+    }
+    const payload = (await response.json()) as { items?: { title?: string; description?: string }[] };
+    return (payload.items ?? []).map((item) => ({
+      title: stripHtml(item.title ?? ""),
+      description: stripHtml(item.description ?? ""),
+    }));
+  } catch (error) {
+    logger.warn({ err: error, endpoint, query }, "Naver text search failed");
+    return [];
+  }
+}
+
+// 네이버 웹문서 검색 → 안 나오면 블로그 검색 순으로 "회사명 (지역) 전화번호"를
+// 찾아 본다. 알고 있는 주소가 있으면 지역명을 검색어에 더해 동명의 다른 업체가
+// 섞여 들어올 확률을 낮춘다. 회사명이 실제 스니펫에 등장하는 결과만 신뢰하고,
+// 라벨이 붙은 전화번호 패턴을 우선하고 없으면 느슨한 패턴으로 한 번 더 시도한다.
+export async function searchBusinessContactOnWeb(
+  companyName: string,
+  knownAddress?: string | null,
+): Promise<{ phone?: string } | null> {
+  const trimmedName = companyName.trim();
+  if (!trimmedName || trimmedName === "미공개/확인불가") return null;
+  if (!process.env.NAVER_CLIENT_ID || !process.env.NAVER_CLIENT_SECRET) return null;
+
+  const region = regionHint(knownAddress);
+  const queries = region ? [`${trimmedName} ${region} 전화번호`, `${trimmedName} 전화번호`] : [`${trimmedName} 전화번호`];
+
+  for (const query of queries) {
+    for (const endpoint of ["webkr", "blog"] as const) {
+      const items = await searchNaverText(endpoint, query);
+      for (const item of items) {
+        const combined = `${item.title} ${item.description}`;
+        if (!combined.includes(trimmedName)) continue;
+        const phone =
+          combined.match(BUSINESS_PHONE_PATTERN)?.[1] ?? combined.match(BUSINESS_PHONE_FALLBACK_PATTERN)?.[0];
+        if (phone) return { phone };
+      }
+    }
+  }
+  return null;
 }
 
 // Fills in bidderAddress/bidderPhone when the government award record left
@@ -706,7 +819,8 @@ export async function searchBusinessContactOnPortal(
 async function fillMissingBusinessContact(job: CollectionJob, result: SearchResult): Promise<void> {
   if (!result.bidderName || result.bidderName === "미공개/확인불가") return;
   const needsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
-  const needsPhone = !result.bidderPhone || result.bidderPhone === "미공개/확인불가";
+  const needsPhone =
+    !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
   if (!needsAddress && !needsPhone) return;
 
   const fromAttachment = await findBusinessContactInAttachments(job, result.noticeNumber, result.bidderName);
@@ -720,18 +834,33 @@ async function fillMissingBusinessContact(job: CollectionJob, result: SearchResu
   }
 
   const stillNeedsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
-  const stillNeedsPhone = !result.bidderPhone || result.bidderPhone === "미공개/확인불가";
+  const stillNeedsPhone =
+    !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
   if (!stillNeedsAddress && !stillNeedsPhone) return;
 
-  const fromPortal = await searchBusinessContactOnPortal(result.bidderName);
-  if (!fromPortal) return;
-  if (stillNeedsAddress && fromPortal.address) {
-    result.bidderAddress = fromPortal.address;
-    result.contactSource ??= "portal";
+  const knownAddress =
+    result.bidderAddress && result.bidderAddress !== "미공개/확인불가" ? result.bidderAddress : null;
+
+  const fromPortal = await searchBusinessContactOnPortal(result.bidderName, knownAddress);
+  if (fromPortal) {
+    if (stillNeedsAddress && fromPortal.address) {
+      result.bidderAddress = fromPortal.address;
+      result.contactSource ??= "portal";
+    }
+    if (stillNeedsPhone && fromPortal.phone) {
+      result.bidderPhone = fromPortal.phone;
+      result.contactSource ??= "portal";
+    }
   }
-  if (stillNeedsPhone && fromPortal.phone) {
-    result.bidderPhone = fromPortal.phone;
-    result.contactSource ??= "portal";
+
+  const stillNeedsPhoneAfterPortal =
+    !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
+  if (stillNeedsPhoneAfterPortal) {
+    const fromWeb = await searchBusinessContactOnWeb(result.bidderName, knownAddress);
+    if (fromWeb?.phone) {
+      result.bidderPhone = fromWeb.phone;
+      result.contactSource = "web";
+    }
   }
 }
 
@@ -1815,6 +1944,7 @@ function resultRows(job: CollectionJob): unknown[][] {
                 government: "GOV_API_FOUND",
                 attachment: "ATTACHMENT_FOUND",
                 portal: "PORTAL_SEARCH_FOUND",
+                web: "WEB_SEARCH_FOUND",
               }[item.contactSource ?? "government"]
             : "CONTACT_NOT_FOUND"
         : "NOT_APPLICABLE",
