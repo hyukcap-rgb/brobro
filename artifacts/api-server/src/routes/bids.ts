@@ -10,6 +10,7 @@ import {
   buildCsv,
   buildXlsx,
   createCollectionJob,
+  deleteAllJobs,
   getCollectionJob,
   listRecentJobs,
   parseNoticeUpload,
@@ -53,6 +54,19 @@ router.post("/bids/import", async (req, res) => {
     res.json(await parseNoticeUpload(fileName, contentBase64));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "업로드 파일을 읽지 못했습니다." });
+  }
+});
+
+// 요구사항(2026-09-10 사용자 요청: "우선 지금 test로 되어있는 결과값들은 모두
+// 삭제해줘"): 배포 확인용으로 만들었던 검색 작업들을 한 번에 정리하는 일회성
+// 전체 삭제. 화면 버튼은 만들지 않고 관리자가 필요할 때 직접 호출한다.
+router.delete("/bids/jobs", async (req, res) => {
+  try {
+    const result = await deleteAllJobs();
+    res.json(result);
+  } catch (error) {
+    req.log.error({ err: error }, "Could not delete search history");
+    res.status(500).json({ error: "검색 기록을 삭제하지 못했습니다." });
   }
 });
 
