@@ -667,6 +667,11 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                   [itemFields.itemQuantity, itemFields.itemUnit]
                     .filter((value) => value && value !== "미공개/확인불가")
                     .join(" ") || null;
+                // 요구사항(2026-09-10 사용자 요청: "수량이 없는 키워드는 검색하지
+                // 마 ... 검색 결과에 키워드/수량을 꼭 함께 넣어줘"): 문서에 키워드
+                // 단어 자체는 있어도 수량을 특정할 수 없으면 실제 발주 물량을 알 수
+                // 없는 단순 언급일 가능성이 커서 영업 리드로 만들지 않는다.
+                if (!quantityText) continue;
                 // 요구사항 6: 현장명 / 현장사무소 / 수량.
                 const siteOffice =
                   guessSiteOffice(match.surroundingText) ??
