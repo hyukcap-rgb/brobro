@@ -261,7 +261,11 @@ export default function Settings() {
           <div className="space-y-2">
             <Label htmlFor="minBudget">최소 공사 규모 (원)</Label>
             <p className="text-xs text-muted-foreground">
-              이 금액 미만인 공고는 제외합니다. 추정가격이 없는 공고를 걸러내는 안전장치로도 쓰입니다. 기본값: 50,000,000원
+              이 금액 미만인 공고는 제외합니다. 추정가격이 없는 공고를 걸러내는 안전장치로도 쓰입니다. 현재 설정:{" "}
+              {minBudgetAmount.trim() === "" || Number.isNaN(Number(minBudgetAmount))
+                ? "미입력"
+                : `${Number(minBudgetAmount).toLocaleString("ko-KR")}원`}{" "}
+              (기본값 50,000,000원)
             </p>
             <Input
               id="minBudget"
