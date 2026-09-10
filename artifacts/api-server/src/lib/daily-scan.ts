@@ -19,6 +19,7 @@ import {
   extractItemFields,
   extractBusinessContactFromText,
   searchBusinessContactOnPortal,
+  searchBusinessContactOnWeb,
 } from "./bid-processing";
 import { getAppSettings } from "./settings";
 import { kstToday, shiftKstDate, isKoreanHoliday, type KstDate } from "./kr-holidays";
@@ -300,10 +301,14 @@ async function resolveBidderContact(
   addressFromAward: string | null,
   phoneFromAward: string | null,
   attachmentText: string,
-): Promise<{ address: string | null; phone: string | null; contactSource: "government" | "attachment" | "portal" | null }> {
+): Promise<{
+  address: string | null;
+  phone: string | null;
+  contactSource: "government" | "attachment" | "portal" | "web" | null;
+}> {
   let address = addressFromAward;
   let phone = isUsablePhone(phoneFromAward) ? phoneFromAward : null;
-  let contactSource: "government" | "attachment" | "portal" | null = address || phone ? "government" : null;
+  let contactSource: "government" | "attachment" | "portal" | "web" | null = address || phone ? "government" : null;
 
   if (!bidderName) return { address, phone, contactSource };
   const needsAddress = !address;
@@ -322,7 +327,11 @@ async function resolveBidderContact(
 
   if (address && phone) return { address, phone, contactSource };
 
-  const fromPortal = await searchBusinessContactOnPortal(bidderName);
+  // 요구사항(전화번호 정확도 보완, 2026-09-09 사용자 리포트: "회사이름과
+  // 주소를 교차검증하면 전화번호를 정확히 찾을 수 있을 것 같아"): 이미 알고
+  // 있는 주소(이 시점의 address)가 있으면 지역명을 검색어에 더하고, 결과
+  // 주소가 그 지역과 일치하는지 교차검증해 동명의 다른 업체를 걸러낸다.
+  const fromPortal = await searchBusinessContactOnPortal(bidderName, address);
   if (fromPortal) {
     if (!address && fromPortal.address) {
       address = fromPortal.address;
@@ -331,6 +340,19 @@ async function resolveBidderContact(
     if (!phone && isUsablePhone(fromPortal.phone)) {
       phone = fromPortal.phone ?? null;
       contactSource = "portal";
+    }
+  }
+
+  // 요구사항(전화번호 검색 보완, 2026-09-09): 네이버 지역검색은 "스마트플레이스"
+  // 등록 업체만 색인해서 협동조합·비영리단체 등은 못 찾는 경우가 있다(명문사회적
+  // 협동조합 사례). 그래도 전화번호가 여전히 없으면 더 넓게 색인된 네이버
+  // 웹문서/블로그 검색으로 최후 보완한다. 텍스트 검색결과에서 정규식으로 뽑아내는
+  // 값이라 정확도는 낮으므로 contactSource를 "web"으로 따로 남긴다.
+  if (!phone) {
+    const fromWeb = await searchBusinessContactOnWeb(bidderName, address);
+    if (fromWeb && isUsablePhone(fromWeb.phone)) {
+      phone = fromWeb.phone ?? null;
+      contactSource = "web";
     }
   }
 
