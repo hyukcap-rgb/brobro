@@ -1475,6 +1475,14 @@ async function processNotice(
             });
             continue;
           }
+          // 요구사항(2026-09-10 사용자 요청: "수량이 없는 키워드는 검색하지
+          // 마 ... 검색 결과에 키워드/수량을 꼭 함께 넣어줘"): 문서에 키워드
+          // 단어 자체는 있어도 수량(예: 000㎡, 00kg 등)을 특정할 수 없으면
+          // 실제 발주 물량을 확인할 수 없는 단순 언급일 가능성이 커서
+          // 매칭에서 제외한다.
+          matches = matches.filter(
+            (match) => extractItemFields(match.originalText, job.keywords).itemQuantity !== "미공개/확인불가",
+          );
           attachmentResult.keywordFound ||= matches.length > 0;
           if (!matches.length) {
             job.searchResults.push({
