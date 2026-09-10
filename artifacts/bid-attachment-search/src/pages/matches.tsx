@@ -62,6 +62,27 @@ function formatDateTime(value: string | null | undefined): string {
   }
 }
 
+// 요구사항(2026-09-10 사용자 요청: "대상일이 2일 이상일때 옆으로 나열되는게
+// 불편해. 9/3~5일 이렇게 표시해줘"): "지금 실행"은 최근 3일을 항상 재확인하므로
+// targetDates가 여러 날짜로 찍히는데, 이를 "2026-09-07, 2026-09-08,
+// 2026-09-09"처럼 풀어 쓰면 한눈에 읽기 어렵다. 날짜가 하나면 "9/7"처럼, 연속된
+// 여러 날짜면 "9/7~9"처럼, 달이 걸치면 "9/29~10/1"처럼 압축해서 보여준다.
+function formatTargetDates(dates: string[]): string {
+  if (dates.length === 0) return "-";
+  const sorted = [...dates].sort();
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  const [, firstMonth, firstDay] = first.split("-").map(Number);
+  const [, lastMonth, lastDay] = last.split("-").map(Number);
+  if (sorted.length === 1 || first === last) {
+    return `${firstMonth}/${firstDay}`;
+  }
+  if (firstMonth === lastMonth) {
+    return `${firstMonth}/${firstDay}~${lastDay}`;
+  }
+  return `${firstMonth}/${firstDay}~${lastMonth}/${lastDay}`;
+}
+
 function formatAmount(value: number | null | undefined): string {
   if (value == null) return "-";
   return `${value.toLocaleString("ko-KR")}원`;
@@ -231,7 +252,7 @@ export default function Matches() {
               {selectedScan ? (
                 <>
                   <ListFilter className="inline h-3.5 w-3.5 mr-1 align-text-bottom" />
-                  실행 기록 하나(대상일 {selectedScan.targetDates.join(", ")}, {formatDateTime(selectedScan.startedAt)})의
+                  실행 기록 하나(대상일 {formatTargetDates(selectedScan.targetDates)}, {formatDateTime(selectedScan.startedAt)})의
                   매칭 결과만 걸러서 보고 있습니다. 오른쪽의 "필터 해제"를 누르면 오늘 결과로 돌아갑니다.
                 </>
               ) : (
@@ -478,7 +499,6 @@ export default function Matches() {
                   <TableRow>
                     <TableHead>상태</TableHead>
                     <TableHead>대상일</TableHead>
-                    <TableHead>실행 방식</TableHead>
                     <TableHead>낙찰 건수</TableHead>
                     <TableHead>확인 건수</TableHead>
                     <TableHead>매칭 건수</TableHead>
@@ -490,8 +510,7 @@ export default function Matches() {
                   {scans.map((scan) => (
                     <TableRow key={scan.id} className={scan.id === selectedScanRunId ? "bg-muted/50" : undefined}>
                       <TableCell>{scanStatusBadge(scan.status)}</TableCell>
-                      <TableCell className="text-xs">{scan.targetDates.join(", ")}</TableCell>
-                      <TableCell className="text-xs">{scan.triggerType === "manual" ? "수동" : "자동"}</TableCell>
+                      <TableCell className="text-xs">{formatTargetDates(scan.targetDates)}</TableCell>
                       <TableCell>{scan.awardsFound}</TableCell>
                       <TableCell>{scan.candidatesChecked}</TableCell>
                       <TableCell className="font-medium">
