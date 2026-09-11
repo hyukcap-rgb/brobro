@@ -2,7 +2,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { copyFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { desc, eq, inArray, notInArray } from "drizzle-orm";
-import { db, dailyScanRunsTable, awardedMatchesTable, type DailyScanRun } from "@workspace/db";
+import { db, dailyScanRunsTable, awardedMatchesTable, noticeDetailCacheTable, type DailyScanRun } from "@workspace/db";
 import {
   requestBuffer,
   formatServiceKey,
@@ -317,6 +317,42 @@ async function fetchNoticeDetail(
   return items.find((item) => Number(item.bidNtceOrd) === wanted) ?? items[0] ?? null;
 }
 
+// 요구사항(2026-09-11 사용자 제안: "전일 공사 항목의 첨부파일을 서버에 저장하고
+// 서버에 저장한 파일을 키워드 검색하면 어떨까"): 공고 상세정보(첨부파일 URL,
+// 예산, 업무구분 등)는 한 번 등록되면 이후로 바뀌지 않는다 — 매일 다시 확인해야
+// 하는 것은 "최종낙찰자 확정 여부"뿐이고, 그건 상세 API가 아니라 낙찰 목록
+// API(fetchAwardsForDate)로 확인한다. 그런데도 RECHECK_WINDOW_DAYS(최근 3일
+// 재확인) 로직 때문에 같은 공고의 상세정보를 매일, 그리고 수동 재실행 때마다
+// data.go.kr 상세 API로 매번 다시 조회하고 있었다 — 이것이 "일일 서비스
+// 요청제한 횟수 초과" 오류의 실질적 원인이었다. 한 번 성공한 상세정보를 DB에
+// 캐시해두고 같은 공고를 다시 만나면 캐시를 그대로 재사용해 API 호출 자체를
+// 없앤다.
+async function getCachedNoticeDetail(noticeNumber: string): Promise<Record<string, unknown> | null> {
+  const [row] = await db
+    .select({ detailJson: noticeDetailCacheTable.detailJson })
+    .from(noticeDetailCacheTable)
+    .where(eq(noticeDetailCacheTable.noticeNumber, noticeNumber))
+    .limit(1);
+  return row?.detailJson ?? null;
+}
+
+async function cacheNoticeDetail(
+  noticeNumber: string,
+  source: WorkSource,
+  detail: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await db
+      .insert(noticeDetailCacheTable)
+      .values({ noticeNumber, source, detailJson: detail })
+      .onConflictDoNothing();
+  } catch (error) {
+    // 캐시 저장 실패는 이번 실행의 매칭 결과에 영향을 주면 안 되므로(다음 번에
+    // 다시 API로 조회하면 그만이다) 경고만 남기고 계속 진행한다.
+    logger.warn({ err: error, noticeNumber }, "일별 스캔: 공고 상세 캐시 저장 실패");
+  }
+}
+
 // 요구사항: "업무구분"(공종) 필터. 나라장터 상세 API의 주공종명/부공종명 필드는
 // 실제로 비어있는 경우가 많아, 채워져 있으면 그것으로 판단하고 비어 있으면 공고명 등
 // 텍스트에서 설정된 공종 키워드를 찾는 방식으로 대체한다(하이브리드). 이 필드들은
@@ -537,6 +573,10 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
     // 요구사항(2026-09-10 사용자 리포트: "부직포 매칭이 하나도 안됨"): data.go.kr
     // 일일 호출 한도 초과로 상세 조회 자체가 실패한 건수를 별도로 센다.
     quotaExceeded: 0,
+    // 요구사항(2026-09-11 사용자 제안: "첨부파일을 서버에 저장하고 검색하면
+    // 어떨까"): API를 다시 부르지 않고 캐시로 해결한 건수 — 이 수가 클수록
+    // 오늘 절약한 API 호출 수라고 보면 된다.
+    detailFromCache: 0,
   };
 
   // 같은 낙찰자가 여러 건 매칭되면(같은 공고의 여러 첨부파일, 또는 여러 공고를
@@ -590,17 +630,26 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         const noticeNumber = `${bidNtceNo}-${bidNtceOrd.padStart(3, "0")}`;
         candidatesChecked += 1;
 
-        let detail: Record<string, unknown> | null = null;
-        try {
-          const lookup = await withRetry(() => fetchNoticeDetail(bidNtceNo, bidNtceOrd, source), 2);
-          detail = lookup.value;
-        } catch (error) {
-          if (error instanceof QuotaExceededError) {
-            funnel.quotaExceeded += 1;
+        let detail: Record<string, unknown> | null = await getCachedNoticeDetail(noticeNumber);
+        if (detail) {
+          funnel.detailFromCache += 1;
+        } else {
+          try {
+            const lookup = await withRetry(() => fetchNoticeDetail(bidNtceNo, bidNtceOrd, source), 2);
+            detail = lookup.value;
+          } catch (error) {
+            if (error instanceof QuotaExceededError) {
+              funnel.quotaExceeded += 1;
+              continue;
+            }
+            logger.warn({ err: error, noticeNumber, source }, "일별 스캔: 공고 상세 조회 실패");
             continue;
           }
-          logger.warn({ err: error, noticeNumber, source }, "일별 스캔: 공고 상세 조회 실패");
-          continue;
+          if (detail) {
+            // 요구사항(2026-09-11 사용자 제안): 성공한 상세정보는 캐시에 저장해
+            // 다음 재확인/재실행 때 API를 다시 부르지 않게 한다.
+            await cacheNoticeDetail(noticeNumber, source, detail);
+          }
         }
         if (!detail) {
           funnel.noDetail += 1;
