@@ -85,6 +85,19 @@ export async function ensureSchema(): Promise<void> {
     -- 이미 삭제된 상태이고 리드 레코드 자체는 남아있음을 뜻한다.
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS attachment_deleted_at TIMESTAMPTZ;
 
+    -- 요구사항(2026-09-11 사용자 제안: "전일 공사 항목의 첨부파일을 서버에
+    -- 저장하고 서버에 저장한 파일을 키워드 검색하면 어떨까"): 공고 상세정보(첨부
+    -- 파일 URL, 예산, 업무구분 등)는 공고 등록 후 바뀌지 않는데도, 최근 3일
+    -- 재확인 로직 때문에 daily-scan.ts가 같은 공고를 매일/매번 재실행할 때마다
+    -- data.go.kr 상세 API를 다시 불러 "일일 서비스 요청제한 횟수 초과" 오류의
+    -- 원인이 됐다. 한 번 조회에 성공한 상세정보를 여기 캐시해 재조회를 없앤다.
+    CREATE TABLE IF NOT EXISTS notice_detail_cache (
+      notice_number TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      detail_json JSONB NOT NULL,
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     -- express-session's store (connect-pg-simple) ships a table.sql asset it
     -- reads from disk to create this table on demand ("createTableIfMissing").
     -- That file doesn't survive our esbuild bundling step, so relying on it
