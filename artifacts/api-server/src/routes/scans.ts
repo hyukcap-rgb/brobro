@@ -80,11 +80,12 @@ router.post("/scans/run", async (req, res) => {
   }
   try {
     const run = await createPendingScanRun("manual", explicitRange);
-    // 요구사항(2026-09-11 사용자 지적: 나라장터 "검색유형=최종낙찰자" 화면도
-    // 개찰일자로 조회한다 — "최종낙찰자가 있는 건 중 개찰일을 기준으로 검색하면
-    // 모든게 해결되잖아... 모든것의 기준이야"): "지금 실행"과 "이 기간으로 검색"
-    // 모두 개찰일 기준 조회 + 낙찰자 확정 건만 남기는 동일한 기준을 쓰므로 더 이상
-    // 옵션을 분기하지 않는다(daily-scan.ts executeScanRun 참고).
+    // 요구사항(2026-09-11 사용자 재지적: "모든 검색의 기준은 낙찰일이란
+    // 말이야 — 낙찰 된 건 >> 키워드가 있는 건, 이 순서대로 하란말이야"):
+    // "지금 실행"과 "이 기간으로 검색" 모두 낙찰일(fnlSucsfDate) 기준으로
+    // 대상 날짜를 정하고, 개찰일은 그 낙찰일을 찾기 위해 내부적으로 넓게
+    // 훑는 조회 수단일 뿐이므로 더 이상 옵션을 분기하지 않는다(daily-scan.ts
+    // executeScanRun 참고).
     void executeScanRun(run).catch((error) => {
       logger.error({ err: error, runId: run.id }, "Manual scan run failed");
     });
