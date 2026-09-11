@@ -94,27 +94,6 @@ function extractOpenApiErrorMessage(bodyText: string): string | null {
 // 안전하게 재확인할 수 있다.
 const RECHECK_WINDOW_DAYS = 3;
 
-// 요구사항(2026-09-11 사용자 요청: "기간 지정하는 기간 또한 낙찰일을 기준으로
-// 검색하라는 뜻이야" / "낙찰자가 확정된 건만 검색해야 헷갈리지 않는데"): 나라장터
-// 낙찰정보 API는 개찰일시 기준으로만 조회할 수 있고 낙찰일(최종낙찰자 확정일)
-// 기준 조회를 지원하지 않는다. "이 기간으로 검색"이 낙찰일 기준으로 동작하려면,
-// 지정한 시작일보다 이만큼 더 이전 날짜까지 개찰일 기준으로 넓게 훑은 뒤, 그중
-// 실제 낙찰일(확정일)이 지정 기간 안에 드는 건만 남겨야 한다(바로 위 주석처럼
-// 확정이 개찰 후 며칠씩 늦어지는 사례가 흔해 안전 마진을 둔다). 아직 확정일
-// 자체가 없는 건(화면에 개찰일로 대체 표시되던 것)은 사용자 확인에 따라 "낙찰일
-// 기준" 결과에서 완전히 제외한다.
-const MANUAL_RANGE_AWARD_DATE_LOOKBACK_DAYS = 14;
-
-// 나라장터 날짜 필드는 "YYYY-MM-DD" 또는 "YYYY-MM-DD HH:MI:SS" 형태로 온다.
-// 앞 10자리만 취해 날짜 키로 비교한다(문자열 사전식 비교 = 날짜순 비교가 그대로
-// 성립하는 "YYYY-MM-DD" 형식이므로).
-function extractDateKey(raw: unknown): string | null {
-  const trimmed = String(raw ?? "").trim();
-  if (!trimmed) return null;
-  const key = trimmed.slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : null;
-}
-
 // 업무구분(사업 종류)별 나라장터 OpenAPI 엔드포인트. 조달청이 물품(Thng)/
 // 용역(Servc)/공사(Cnstwk)를 각각 별도 오퍼레이션으로 제공하기 때문에, 사용자가
 // 설정에서 고른 업무구분마다 이 매핑으로 정확한 URL을 찾아 따로 조회한다.
@@ -625,25 +604,21 @@ export async function createPendingScanRun(
   return run;
 }
 
-export async function executeScanRun(
-  run: DailyScanRun,
-  options?: { awardDateRange?: { start: string; end: string } },
-): Promise<DailyScanRun> {
+// 요구사항(2026-09-11 사용자 지적: 나라장터 화면 캡처 — "검색유형"에 이미
+// "최종낙찰자"가 있고, 그 탭도 날짜는 개찰일자 기준으로 조회한다며 "최종낙찰자가
+// 있는 건 중 개찰일을 기준으로 검색하면 모든게 해결되잖아... 모든것의 기준이야"):
+// 이전에는 "이 기간으로 검색"만 낙찰일(확정일) 기준으로 동작하도록 시작일을
+// 14일 앞당겨 넓게 조회한 뒤 fnlSucsfDate로 다시 걸러냈으나, 나라장터 공식
+// 화면의 "최종낙찰자" 검색 유형과 동일하게 개찰일 기준으로만 조회하고 그중
+// 낙찰자가 확정된 건만 남기는 것으로 통일한다(아래 confirmedAwards 필터).
+// "지금 실행"과 "이 기간으로 검색" 모두 이 하나의 기준을 따른다 — 더 이상 두
+// 흐름을 구분할 필요가 없다.
+export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
   const settings = await getAppSettings();
-  const targetDates = run.targetDates.map((key) => {
+  const fetchDates = run.targetDates.map((key) => {
     const [year, month, day] = key.split("-").map(Number);
     return { key, compact: key.replaceAll("-", ""), year, month, day, weekday: 0 } as KstDate;
   });
-  // 요구사항(2026-09-11, 낙찰일 기준 검색): 지정 기간 시작일보다 더 이전까지
-  // 개찰일 기준으로 넓게 조회할 대상 날짜. run.targetDates(=화면 "대상일"에 표시될
-  // 사용자가 지정한 기간)는 그대로 두고, 실제 나라장터 조회 범위만 넓힌다.
-  const awardDateRange = options?.awardDateRange;
-  const fetchDates = awardDateRange
-    ? buildDateRange(
-        shiftKstDate(kstDateFromKey(awardDateRange.start), -MANUAL_RANGE_AWARD_DATE_LOOKBACK_DAYS).key,
-        awardDateRange.end,
-      )
-    : targetDates;
   const workSources = resolveWorkSources(settings.workCategories);
 
   let awardsFound = 0;
@@ -702,17 +677,9 @@ export async function executeScanRun(
           logger.warn({ err: error, source, date: date.key }, "일별 스캔: 낙찰 목록 조회 실패");
         }
       }
-      // 요구사항: 최종 낙찰자가 확정된 공고만.
-      let confirmedAwards = awardItems.filter((item) => String(item.bidwinnrNm ?? "").trim().length > 0);
-      if (awardDateRange) {
-        // 요구사항(2026-09-11, 낙찰일 기준 검색): 위에서 넓게 가져온 후보 중
-        // 실제 낙찰일(fnlSucsfDate, 개찰일로의 대체 없이)이 지정 기간 안에 드는
-        // 것만 남긴다. 확정일 자체가 없는 건은 "낙찰일 기준" 결과에서 제외한다.
-        confirmedAwards = confirmedAwards.filter((item) => {
-          const awardDateKey = extractDateKey(item.fnlSucsfDate);
-          return awardDateKey != null && awardDateKey >= awardDateRange.start && awardDateKey <= awardDateRange.end;
-        });
-      }
+      // 요구사항: 나라장터 "최종낙찰자" 검색 유형과 동일하게, 개찰일 기준으로
+      // 조회한 후보 중 최종 낙찰자가 확정된 공고만 남긴다.
+      const confirmedAwards = awardItems.filter((item) => String(item.bidwinnrNm ?? "").trim().length > 0);
       awardsFound += confirmedAwards.length;
 
       // 예산(공사 규모) 사전 필터: 상세 조회는 비용이 크므로, 낙찰금액(통상 예산의
