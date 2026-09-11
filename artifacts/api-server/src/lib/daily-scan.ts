@@ -20,6 +20,7 @@ import {
   extractBusinessContactFromText,
   searchBusinessContactOnPortal,
   searchBusinessContactOnWeb,
+  lookupGovCorpInfo,
 } from "./bid-processing";
 import { getAppSettings } from "./settings";
 import { kstToday, shiftKstDate, isKoreanHoliday, type KstDate } from "./kr-holidays";
@@ -431,14 +432,15 @@ async function resolveBidderContact(
   addressFromAward: string | null,
   phoneFromAward: string | null,
   attachmentText: string,
+  bizno: string | null,
 ): Promise<{
   address: string | null;
   phone: string | null;
-  contactSource: "government" | "attachment" | "portal" | "web" | null;
+  contactSource: "government" | "attachment" | "registry" | "portal" | "web" | null;
 }> {
   let address = addressFromAward;
   let phone = isUsablePhone(phoneFromAward) ? phoneFromAward : null;
-  let contactSource: "government" | "attachment" | "portal" | "web" | null = address || phone ? "government" : null;
+  let contactSource: "government" | "attachment" | "registry" | "portal" | "web" | null = address || phone ? "government" : null;
 
   if (!bidderName) return { address, phone, contactSource };
   const needsAddress = !address;
@@ -456,6 +458,26 @@ async function resolveBidderContact(
   }
 
   if (address && phone) return { address, phone, contactSource };
+
+  // 요구사항(2026-09-11 사용자 요청: 조달청 "나라장터 사용자정보 서비스"
+  // (조달업체 기본정보 조회) 공공데이터를 낙찰자 연락처 보강에 써달라고
+  // 요청 → "기존 낙찰자 정보를 이 API로 보강" 선택): 사업자등록번호를 알고
+  // 있으면 조달청에 정식 등록된 주소/전화를 정확 매칭으로 조회한다. 회사명
+  // 텍스트 검색인 Naver보다 신뢰도가 높으므로 그보다 먼저 시도한다.
+  if (bizno) {
+    const fromRegistry = await lookupGovCorpInfo(bizno);
+    if (fromRegistry) {
+      if (!address && fromRegistry.address) {
+        address = fromRegistry.address;
+        contactSource = "registry";
+      }
+      if (!phone && isUsablePhone(fromRegistry.phone)) {
+        phone = fromRegistry.phone ?? null;
+        contactSource = "registry";
+      }
+    }
+    if (address && phone) return { address, phone, contactSource };
+  }
 
   // 요구사항(전화번호 정확도 보완, 2026-09-09 사용자 리포트: "회사이름과
   // 주소를 교차검증하면 전화번호를 정확히 찾을 수 있을 것 같아"): 이미 알고
@@ -625,11 +647,12 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
     addressFromAward: string | null,
     phoneFromAward: string | null,
     attachmentText: string,
+    bizno: string | null,
   ) {
-    const cacheKey = `${bidderName ?? ""}|${addressFromAward ?? ""}|${phoneFromAward ?? ""}`;
+    const cacheKey = `${bidderName ?? ""}|${addressFromAward ?? ""}|${phoneFromAward ?? ""}|${bizno ?? ""}`;
     const cached = contactCache.get(cacheKey);
     if (cached) return cached;
-    const resolved = await resolveBidderContact(bidderName, addressFromAward, phoneFromAward, attachmentText);
+    const resolved = await resolveBidderContact(bidderName, addressFromAward, phoneFromAward, attachmentText, bizno);
     contactCache.set(cacheKey, resolved);
     return resolved;
   }
@@ -843,6 +866,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                   String(award.bidwinnrAdrs ?? "").trim() || null,
                   String(award.bidwinnrTelNo ?? "").trim() || null,
                   `${match.surroundingText}\n${match.originalText}`,
+                  String(award.bidwinnrBizno ?? "").trim() || null,
                 );
 
                 try {
