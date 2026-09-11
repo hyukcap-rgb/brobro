@@ -22,7 +22,7 @@ import type { Response } from "express";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import * as unzipper from "unzipper";
 import { eq } from "drizzle-orm";
-import { db, businessContactCacheTable } from "@workspace/db";
+import { db, businessContactCacheTable, govCorpCacheTable } from "@workspace/db";
 import { logger } from "./logger";
 import { kstToday } from "./kr-holidays";
 
@@ -280,6 +280,262 @@ async function cacheWebContact(cacheKey: string, phone: string | null): Promise<
     });
 }
 
+// 요구사항(2026-09-11 사용자 요청: 조달청 "조달업체 등록 내역" 공공데이터를
+// 알려주며 낙찰자 연락처 보강에 써달라고 요청 → "기존 낙찰자 정보를 이 API로
+// 보강" 선택): 이미 알고 있는 낙찰자 사업자등록번호(bizno)로 조달청 "나라
+// 장터 사용자정보 서비스"(조달업체 기본정보 조회, getPrcrmntCorpBasicInfo02)
+// API에서 정식 등록된 주소/전화번호를 조회한다. 네이버 검색(회사명 텍스트
+// 매칭이라 동명업체 오류 가능)보다 사업자등록번호 정확 매칭이 훨씬 신뢰도가
+// 높으므로 resolveBidderContact에서 Naver 포털/웹 검색보다 먼저 시도한다.
+// 이 서비스도 data.go.kr 계정의 별도 일일 트래픽 한도(안내 페이지 기준
+// 운영계정 기본 신청량 10,000/일, 서비스가 다르면 별도 집계)가 있으므로
+// Naver 가드와 같은 패턴으로 일일 호출 상한 + 연속실패 서킷브레이커를 둔다.
+// 같은 bizno는 평생 한 번만 조회하고 결과(못 찾은 경우 포함)를 영구 캐시한다.
+const GOV_REGISTRY_DAILY_CALL_BUDGET = Number(process.env.GOV_REGISTRY_DAILY_CALL_BUDGET) || 3000;
+const GOV_REGISTRY_CIRCUIT_FAILURE_THRESHOLD = 3;
+const GOV_REGISTRY_CIRCUIT_OPEN_MS = 10 * 60_000;
+const govRegistryGuard = {
+  dayKey: "",
+  callCount: 0,
+  consecutiveFailures: 0,
+  openUntil: 0,
+  lastError: "",
+  // inqryDiv("조회구분")의 정확한 허용값이 공식 Swagger 명세에 값 목록 없이
+  // "조회구분"이라고만 나와 있어(2026-09-11 확인), 최초 조회 때 후보값을
+  // 순서대로 시도해 성공한 값을 기억해두고 이후에는 바로 그 값부터 쓴다.
+  resolvedInqryDiv: null as string | null,
+};
+
+function govRegistryGuardResetIfNewDay(): void {
+  const todayKey = kstToday().key;
+  if (govRegistryGuard.dayKey !== todayKey) {
+    govRegistryGuard.dayKey = todayKey;
+    govRegistryGuard.callCount = 0;
+  }
+}
+
+function govRegistryGuardAllow(): boolean {
+  govRegistryGuardResetIfNewDay();
+  if (govRegistryGuard.openUntil > Date.now()) return false;
+  if (govRegistryGuard.openUntil) {
+    govRegistryGuard.openUntil = 0;
+    govRegistryGuard.consecutiveFailures = 0;
+  }
+  if (govRegistryGuard.callCount >= GOV_REGISTRY_DAILY_CALL_BUDGET) {
+    logger.warn(
+      { callCount: govRegistryGuard.callCount },
+      "조달청 사용자정보 API 일일 호출 한도 도달; 오늘은 더 호출하지 않음",
+    );
+    return false;
+  }
+  return true;
+}
+
+function govRegistryGuardRecordCall(): void {
+  govRegistryGuardResetIfNewDay();
+  govRegistryGuard.callCount += 1;
+}
+
+function govRegistryGuardRecordFailure(detail: string): void {
+  govRegistryGuard.consecutiveFailures += 1;
+  govRegistryGuard.lastError = detail;
+  if (govRegistryGuard.consecutiveFailures >= GOV_REGISTRY_CIRCUIT_FAILURE_THRESHOLD) {
+    govRegistryGuard.openUntil = Date.now() + GOV_REGISTRY_CIRCUIT_OPEN_MS;
+    logger.error(
+      { govRegistryError: detail, circuitOpenUntil: new Date(govRegistryGuard.openUntil).toISOString() },
+      "조달청 사용자정보 API 회로 차단",
+    );
+  }
+}
+
+function govRegistryGuardRecordSuccess(): void {
+  govRegistryGuard.consecutiveFailures = 0;
+  govRegistryGuard.openUntil = 0;
+  govRegistryGuard.lastError = "";
+}
+
+// bizno 단위 영구 캐시 — 이미 조회했던 적이 있으면(못 찾은 경우 포함) 캐시된
+// 값을 그대로 쓰고 API를 다시 부르지 않는다.
+async function getCachedGovCorpInfo(
+  bizno: string,
+): Promise<{ checked: boolean; address?: string; phone?: string }> {
+  const [row] = await db
+    .select()
+    .from(govCorpCacheTable)
+    .where(eq(govCorpCacheTable.bizno, bizno))
+    .limit(1);
+  if (!row || !row.checked) return { checked: false };
+  return {
+    checked: true,
+    address: row.address ?? undefined,
+    phone: row.phone ?? undefined,
+  };
+}
+
+async function cacheGovCorpInfo(
+  bizno: string,
+  result: { address?: string; phone?: string } | null,
+): Promise<void> {
+  await db
+    .insert(govCorpCacheTable)
+    .values({
+      bizno,
+      checked: true,
+      address: result?.address ?? null,
+      phone: result?.phone ?? null,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: govCorpCacheTable.bizno,
+      set: {
+        checked: true,
+        address: result?.address ?? null,
+        phone: result?.phone ?? null,
+        updatedAt: new Date(),
+      },
+    });
+}
+
+function isGovApiQuotaOrAuthError(detail: string): boolean {
+  return /LIMIT|PERMISSION|ACCESS_DENIED|SERVICE_KEY|BLACKLIST|DEADLINE_HAS_EXPIRED/i.test(detail);
+}
+
+// data.go.kr 공통 오류 응답 형태(OpenAPI_ServiceResponse/response 래핑,
+// XML/JSON 혼재)에서 사람이 읽을 원인 메시지를 최대한 뽑아낸다.
+function extractGovApiErrorDetail(raw: string): string | null {
+  try {
+    const json = JSON.parse(raw) as Record<string, unknown>;
+    const envelope = (json.OpenAPI_ServiceResponse ?? json.response ?? json) as Record<string, unknown>;
+    const header = (envelope.cmmMsgHeader ?? envelope.header ?? json.header ?? envelope) as Record<
+      string,
+      unknown
+    >;
+    const authMsg = String(header.returnAuthMsg ?? "").trim();
+    const generalMsg = String(header.resultMsg ?? header.errMsg ?? header.message ?? "").trim();
+    const reasonCode = String(header.returnReasonCode ?? "").trim();
+    const detail = [authMsg || generalMsg, reasonCode ? `코드 ${reasonCode}` : ""].filter(Boolean).join(", ");
+    return detail || null;
+  } catch {
+    return tagValue(raw, "resultMsg") || tagValue(raw, "errMsg") || stripXml(raw).slice(0, 240) || null;
+  }
+}
+
+// getPrcrmntCorpBasicInfo02 1회 호출. inqryDiv 값 하나를 시도해 성공하면
+// item 배열(0건일 수 있음)을, 파라미터/한도/인증 오류면 ok:false를 반환한다
+// (예외를 던지지 않음 — 호출부에서 다음 inqryDiv 후보로 넘어가거나 중단할지
+// 판단한다).
+async function callGovCorpApi(
+  bizno: string,
+  inqryDiv: string,
+  key: string,
+): Promise<{
+  ok: boolean;
+  quotaExceeded: boolean;
+  items: Record<string, unknown>[];
+  errorDetail?: string;
+}> {
+  const query = [
+    `serviceKey=${formatServiceKey(key)}`,
+    "pageNo=1",
+    "numOfRows=10",
+    `inqryDiv=${inqryDiv}`,
+    `bizno=${encodeURIComponent(bizno)}`,
+    "type=json",
+  ].join("&");
+  const response = await requestBuffer(
+    `https://apis.data.go.kr/1230000/ao/UsrInfoService02/getPrcrmntCorpBasicInfo02?${query}`,
+  );
+  const raw = response.body.toString("utf8");
+  if (response.status < 200 || response.status >= 300) {
+    const detail = extractGovApiErrorDetail(raw) ?? `HTTP ${response.status}`;
+    return { ok: false, quotaExceeded: isGovApiQuotaOrAuthError(detail), items: [], errorDetail: detail };
+  }
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return { ok: false, quotaExceeded: false, items: [], errorDetail: stripXml(raw).slice(0, 240) };
+  }
+  const envelope = (payload.OpenAPI_ServiceResponse ?? payload.response ?? payload) as Record<string, unknown>;
+  const header = (envelope.cmmMsgHeader ?? envelope.header ?? payload.header) as
+    | Record<string, unknown>
+    | undefined;
+  const resultCode = header?.resultCode != null ? String(header.resultCode).trim() : null;
+  if (resultCode && resultCode !== "00" && resultCode !== "0") {
+    const detail = String(header?.resultMsg ?? header?.errMsg ?? `resultCode=${resultCode}`).trim();
+    return { ok: false, quotaExceeded: isGovApiQuotaOrAuthError(detail), items: [], errorDetail: detail };
+  }
+  return { ok: true, quotaExceeded: false, items: normalizeItems(payload) };
+}
+
+// 낙찰자 사업자등록번호로 조달청에 정식 등록된 주소/전화번호를 조회한다.
+// 절대 예외를 던지지 않는다 — 호출부(resolveBidderContact 등)가 이 결과가
+// 없어도 나머지 보완 단계(첨부파일/Naver)로 계속 진행할 수 있어야 한다.
+export async function lookupGovCorpInfo(
+  bizno: string | null | undefined,
+): Promise<{ address?: string; phone?: string } | null> {
+  const trimmedBizno = (bizno ?? "").replace(/[^0-9]/g, "");
+  if (trimmedBizno.length !== 10) return null;
+  const key = process.env.DATA_GO_KR_SERVICE_KEY;
+  if (!key) return null;
+
+  const cached = await getCachedGovCorpInfo(trimmedBizno);
+  if (cached.checked) {
+    return cached.address || cached.phone ? { address: cached.address, phone: cached.phone } : null;
+  }
+  if (!govRegistryGuardAllow()) return null;
+
+  const candidates = [govRegistryGuard.resolvedInqryDiv, "1", "2", "3"].filter(
+    (value, index, all): value is string => Boolean(value) && all.indexOf(value) === index,
+  );
+
+  for (const inqryDiv of candidates) {
+    if (!govRegistryGuardAllow()) return null;
+    govRegistryGuardRecordCall();
+    let result: Awaited<ReturnType<typeof callGovCorpApi>>;
+    try {
+      result = await callGovCorpApi(trimmedBizno, inqryDiv, key);
+    } catch (error) {
+      govRegistryGuardRecordFailure(describeError(error));
+      logger.warn({ err: error, bizno: trimmedBizno }, "조달청 사용자정보 API 호출 실패");
+      // 네트워크/회로차단 오류는 inqryDiv 값 문제가 아니므로 다른 값으로
+      // 재시도하지 않는다. 캐시에도 남기지 않아 다음 스캔에서 다시 시도된다.
+      return null;
+    }
+    if (!result.ok) {
+      govRegistryGuardRecordFailure(result.errorDetail ?? "");
+      if (result.quotaExceeded) {
+        logger.warn(
+          { bizno: trimmedBizno, detail: result.errorDetail },
+          "조달청 사용자정보 API 한도/권한 오류 — 오늘은 중단",
+        );
+        return null;
+      }
+      continue; // 파라미터(inqryDiv) 오류로 추정 — 다음 후보 값으로 재시도.
+    }
+    govRegistryGuardRecordSuccess();
+    govRegistryGuard.resolvedInqryDiv = inqryDiv;
+    const item = result.items[0];
+    if (!item) {
+      await cacheGovCorpInfo(trimmedBizno, null);
+      return null;
+    }
+    const address = [String(item.adrs ?? "").trim(), String(item.dtlAdrs ?? "").trim()]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    const phone = String(item.telNo ?? "").trim();
+    const found: { address?: string; phone?: string } = {};
+    if (address) found.address = address;
+    if (phone) found.phone = phone;
+    const finalResult = address || phone ? found : null;
+    await cacheGovCorpInfo(trimmedBizno, finalResult);
+    return finalResult;
+  }
+  logger.warn({ bizno: trimmedBizno }, "조달청 사용자정보 API: 모든 inqryDiv 후보 실패, 결과 없음 처리");
+  return null;
+}
+
 export async function requestBuffer(url: string, timeoutMs = 45_000, redirects = 0): Promise<{
   status: number;
   headers: Record<string, string | string[] | undefined>;
@@ -409,7 +665,7 @@ export interface SearchResult {
   baseAmount?: string;
   constructionOverview?: string;
   awardStatus?: "confirmed" | "not_found";
-  contactSource?: "government" | "attachment" | "portal" | "web";
+  contactSource?: "government" | "attachment" | "registry" | "portal" | "web";
 }
 
 export interface AttachmentResult {
@@ -1010,7 +1266,11 @@ export async function searchBusinessContactOnWeb(
 // Fills in bidderAddress/bidderPhone when the government award record left
 // them blank: the notice's own attachments are tried first (free), then the
 // portal search (rate-limited, needs credentials).
-async function fillMissingBusinessContact(job: CollectionJob, result: SearchResult): Promise<void> {
+async function fillMissingBusinessContact(
+  job: CollectionJob,
+  result: SearchResult,
+  bizno?: string | null,
+): Promise<void> {
   if (!result.bidderName || result.bidderName === "미공개/확인불가") return;
   const needsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
   const needsPhone =
@@ -1027,10 +1287,31 @@ async function fillMissingBusinessContact(job: CollectionJob, result: SearchResu
     result.contactSource ??= "attachment";
   }
 
-  const stillNeedsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
-  const stillNeedsPhone =
+  let stillNeedsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
+  let stillNeedsPhone =
     !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
   if (!stillNeedsAddress && !stillNeedsPhone) return;
+
+  // 요구사항(2026-09-11 사용자 요청): 정부 낙찰기록/첨부파일에도 없으면,
+  // 네이버 검색(회사명 텍스트 매칭이라 동명업체 오류 가능)보다 먼저 사업자
+  // 등록번호로 조달청 정식 등록정보를 정확 매칭 조회한다.
+  if (bizno) {
+    const fromRegistry = await lookupGovCorpInfo(bizno);
+    if (fromRegistry) {
+      if (stillNeedsAddress && fromRegistry.address) {
+        result.bidderAddress = fromRegistry.address;
+        result.contactSource ??= "registry";
+      }
+      if (stillNeedsPhone && fromRegistry.phone) {
+        result.bidderPhone = fromRegistry.phone;
+        result.contactSource ??= "registry";
+      }
+    }
+    stillNeedsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
+    stillNeedsPhone =
+      !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
+    if (!stillNeedsAddress && !stillNeedsPhone) return;
+  }
 
   const knownAddress =
     result.bidderAddress && result.bidderAddress !== "미공개/확인불가" ? result.bidderAddress : null;
@@ -1078,7 +1359,7 @@ async function enrichKeywordResults(job: CollectionJob, awards: Map<string, Reco
     result.awardStatus = award ? "confirmed" : "not_found";
     result.contactSource = award?.bidwinnrAdrs || award?.bidwinnrTelNo ? "government" : undefined;
     try {
-      await fillMissingBusinessContact(job, result);
+      await fillMissingBusinessContact(job, result, award?.bidwinnrBizno ? String(award.bidwinnrBizno).trim() : null);
     } catch (error) {
       logger.warn(
         { err: error, noticeNumber: result.noticeNumber, bidderName: result.bidderName },
@@ -2165,6 +2446,7 @@ function resultRows(job: CollectionJob): unknown[][] {
             ? {
                 government: "GOV_API_FOUND",
                 attachment: "ATTACHMENT_FOUND",
+                registry: "GOV_REGISTRY_FOUND",
                 portal: "PORTAL_SEARCH_FOUND",
                 web: "WEB_SEARCH_FOUND",
               }[item.contactSource ?? "government"]
