@@ -925,9 +925,9 @@ export const triggerScan = async (triggerScanInput: TriggerScanInput, options?: 
   return customFetch<ScanRun>(getTriggerScanUrl(),
   {
     ...options,
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...options?.headers }, body: JSON.stringify(triggerScanInput)
-
-
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(triggerScanInput)
   }
 );}
 
@@ -949,8 +949,8 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof triggerScan>>, {data: BodyType<TriggerScanInput>}> = (props) => { const {data} = props ?? {};
-
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof triggerScan>>, {data: BodyType<TriggerScanInput>}> = (props) => {
+          const {data} = props ?? {};
 
           return  triggerScan(data,requestOptions)
         }
@@ -962,8 +962,8 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
   return  { mutationFn, ...mutationOptions }}
 
-    export type TriggerScanMutationResult = NonNullable<Awaited<ReturnType<typeof triggerScan>>>; export type TriggerScanMutationBody = BodyType<TriggerScanInput>
-
+    export type TriggerScanMutationResult = NonNullable<Awaited<ReturnType<typeof triggerScan>>>
+    export type TriggerScanMutationBody = BodyType<TriggerScanInput>
     export type TriggerScanMutationError = ErrorType<unknown>
 
     /**
