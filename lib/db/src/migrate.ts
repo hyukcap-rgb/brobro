@@ -48,6 +48,21 @@ export async function ensureSchema(): Promise<void> {
       finished_at TIMESTAMPTZ
     );
 
+    -- 요구사항(2026-09-11 사용자 지적: "이런식으로 하면 손해배상청구 소송"):
+    -- 자동 스캔(매일 07시)과 수동 "지금 실행"이 겹치거나 버튼을 두 번 누르면
+    -- data.go.kr·네이버 API 호출이 그대로 두 배로 나가 한도 초과가 재발할 수
+    -- 있다. status='running'인 행은 항상 최대 1개만 존재하도록 DB 레벨에서
+    -- 강제해 동시 실행 자체를 막는다(daily-scan.ts의 ScanAlreadyRunningError
+    -- 참고). 인덱스 생성 전, 혹시 남아있을 수 있는 고아 running 행(서버가
+    -- 재배포되며 죽은 이전 실행)을 먼저 정리해 인덱스 생성이 실패하지 않게
+    -- 한다 — recoverOrphanedScanRuns()가 어차피 뒤이어 같은 일을 하므로 중복
+    -- 정리는 안전하다.
+    UPDATE daily_scan_runs
+      SET status = 'failed', error_message = '서버 재배포로 스캔이 중단되었습니다.', finished_at = now()
+      WHERE status = 'running';
+    CREATE UNIQUE INDEX IF NOT EXISTS daily_scan_runs_single_running
+      ON daily_scan_runs (status) WHERE status = 'running';
+
     CREATE TABLE IF NOT EXISTS awarded_matches (
       id SERIAL PRIMARY KEY,
       scan_run_id INTEGER REFERENCES daily_scan_runs(id),
@@ -96,6 +111,21 @@ export async function ensureSchema(): Promise<void> {
       source TEXT NOT NULL,
       detail_json JSONB NOT NULL,
       fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- 요구사항(2026-09-11 사용자 지적: "API 는 호출량이 있고... 이런식으로
+    -- 하면 손해배상청구 소송"): 낙찰자 연락처 보완용 네이버 오픈API(지역검색/
+    -- 웹문서/블로그) 호출은 기존에 스캔 실행마다(메모리 캐시만) 새로 나갔다.
+    -- 같은 회사(+지역)를 회사 단위로 영구 캐시해 재조회를 없앤다. 지역검색과
+    -- 웹/블로그검색은 서로 다른 API이므로 조회 여부/결과를 각각 따로 기록한다.
+    CREATE TABLE IF NOT EXISTS business_contact_cache (
+      cache_key TEXT PRIMARY KEY,
+      portal_checked BOOLEAN NOT NULL DEFAULT false,
+      portal_address TEXT,
+      portal_phone TEXT,
+      web_checked BOOLEAN NOT NULL DEFAULT false,
+      web_phone TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     -- express-session's store (connect-pg-simple) ships a table.sql asset it
