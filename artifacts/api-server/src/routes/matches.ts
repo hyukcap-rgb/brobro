@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Router, type IRouter } from "express";
 import { DownloadMatchAttachmentParams, ListMatchesQueryParams } from "@workspace/api-zod";
 import { buildMatchesXlsx, listAwardedMatches, sendDownload } from "../lib/matches-store";
@@ -126,6 +127,15 @@ router.get("/matches/:id/attachment", async (req, res) => {
   }
   try {
     const filePath = await resolveMatchAttachmentPath(match.attachmentStoredPath);
+    // 요구사항(2026-09-11 사용자 요청: "첨부파일을 클릭하면 파일 이름이
+    // 이상해. 나라장터에 올라온 파일명 그대로 다운로드 시켜줘"): res.sendFile만
+    // 쓰면 Content-Disposition이 없어, 파일 확장자로 열 수 없는 형식(예: hwp)의
+    // 경우 브라우저가 URL 경로("attachment")를 저장 파일명으로 써버려 확장자
+    // 까지 사라진다("이상한 파일"로 보이는 원인). 나라장터 원본 파일명
+    // (match.attachmentFileName)을 그대로 저장 파일명으로 지정하되, PDF 등
+    // 미리보기 가능한 형식은 계속 새 탭에서 바로 열리도록 inline을 쓴다.
+    const downloadName = match.attachmentFileName || path.basename(filePath);
+    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(downloadName)}`);
     res.sendFile(filePath);
   } catch (error) {
     res.status(404).json({ error: error instanceof Error ? error.message : "파일을 찾을 수 없습니다." });
