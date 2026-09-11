@@ -31,6 +31,24 @@ import { logger } from "./logger";
 // 공백은 매일 조금씩 나눠서 채워지고, 로그에 경고를 남긴다.
 const MAX_GAP_FILL_DAYS = 14;
 
+// 요구사항(2026-09-11 사용자 지적: "이런식으로 하면 손해배상청구 소송"): 매일
+// 07시 자동 스캔과 관리자의 수동 "지금 실행"이 같은 순간 겹치거나, 버튼을 두 번
+// 눌러 동시에 두 개의 스캔이 돌면 data.go.kr·네이버 API 호출량이 그대로 두
+// 배로 나가 어제 같은 한도 초과가 다시 발생할 수 있다. daily_scan_runs에 걸어둔
+// 부분 유니크 인덱스(status='running'인 행은 항상 최대 1개)가 DB 차원에서 동시
+// 실행을 막아주며, 이 인덱스 위반(23505)을 이 에러로 변환해 호출부가 "진짜
+// 오류"와 "이미 실행 중이라 거절됨"을 구분할 수 있게 한다.
+export class ScanAlreadyRunningError extends Error {
+  constructor(message = "이미 다른 스캔이 진행 중입니다.") {
+    super(message);
+    this.name = "ScanAlreadyRunningError";
+  }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && (error as { code?: string }).code === "23505");
+}
+
 // 요구사항(2026-09-10 사용자 리포트: "부직포 매칭이 하나도 안됨 — 아까는 많았는데"):
 // 원인을 로그로 추적해보니 실제로는 버그가 아니라 data.go.kr(공공데이터포털)의
 // "일일 서비스 요청제한 횟수 초과"(LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR,
@@ -537,10 +555,18 @@ export async function createPendingScanRun(
   const targetDates = explicitDateRange
     ? buildDateRange(explicitDateRange.start, explicitDateRange.end)
     : await computeTargetDatesWithGapFill(); // 요구사항: 기간 지정 시 갭필 없이 그 구간만 검색, 생략 시 기존 자동 로직(전일 기준+미완료 구간 자동 보충) 사용
-  const [run] = await db
-    .insert(dailyScanRunsTable)
-    .values({ targetDates: targetDates.map((d) => d.key), status: "running", triggerType })
-    .returning();
+  let run: DailyScanRun | undefined;
+  try {
+    [run] = await db
+      .insert(dailyScanRunsTable)
+      .values({ targetDates: targetDates.map((d) => d.key), status: "running", triggerType })
+      .returning();
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new ScanAlreadyRunningError();
+    }
+    throw error;
+  }
   if (!run) throw new Error("스캔 작업을 생성하지 못했습니다.");
   await pruneOldScanRuns().catch((error) => {
     logger.warn({ err: error }, "Failed to prune old scan run history");
