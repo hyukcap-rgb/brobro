@@ -21,7 +21,10 @@ import { pipeline } from "node:stream/promises";
 import type { Response } from "express";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import * as unzipper from "unzipper";
+import { eq } from "drizzle-orm";
+import { db, businessContactCacheTable } from "@workspace/db";
 import { logger } from "./logger";
+import { kstToday } from "./kr-holidays";
 
 const execFileAsync = promisify(execFile);
 const API_BASE =
@@ -139,6 +142,142 @@ function recordNetworkSuccess(): void {
   networkCircuit.consecutiveFailures = 0;
   networkCircuit.openUntil = 0;
   networkCircuit.lastError = "";
+}
+
+// 요구사항(2026-09-11 사용자 지적: "api 는 호출량이 있고... 이런식으로 하면
+// 손해배상청구 소송"): 네이버 오픈API(지역검색/웹문서/블로그)는 나라장터
+// API와 별개로 자체 일일 호출 한도가 있다. 낙찰 건마다(스캔당 최대 수십~
+// 수백 건) 회사 연락처를 찾으려고 호출하므로, 장애/한도초과 시 무한정 계속
+// 두들기지 않도록 나라장터용 networkCircuit과 같은 패턴의 회로차단기를 따로
+// 두고, 하루 호출량 자체도 상한을 둬 예산을 초과하면 그날은 더 부르지 않는다.
+const NAVER_DAILY_CALL_BUDGET = 20_000;
+const NAVER_CIRCUIT_FAILURE_THRESHOLD = 3;
+const NAVER_CIRCUIT_OPEN_MS = 10 * 60_000;
+const naverGuard = {
+  dayKey: "",
+  callCount: 0,
+  consecutiveFailures: 0,
+  openUntil: 0,
+  lastError: "",
+};
+
+function naverGuardResetIfNewDay(): void {
+  const todayKey = kstToday().key;
+  if (naverGuard.dayKey !== todayKey) {
+    naverGuard.dayKey = todayKey;
+    naverGuard.callCount = 0;
+  }
+}
+
+// 실제 호출 전에 먼저 확인: 오늘 예산을 다 썼거나 회로가 열려 있으면 호출 자체를
+// 건너뛴다(결과는 "못 찾음"으로 취급 — 캐시에는 남기지 않아 나중에 다시 시도됨).
+function naverGuardAllow(): boolean {
+  naverGuardResetIfNewDay();
+  if (naverGuard.openUntil > Date.now()) return false;
+  if (naverGuard.openUntil) {
+    naverGuard.openUntil = 0;
+    naverGuard.consecutiveFailures = 0;
+  }
+  if (naverGuard.callCount >= NAVER_DAILY_CALL_BUDGET) {
+    logger.warn({ callCount: naverGuard.callCount }, "Naver API daily call budget reached; skipping further calls today");
+    return false;
+  }
+  return true;
+}
+
+function naverGuardRecordCall(): void {
+  naverGuardResetIfNewDay();
+  naverGuard.callCount += 1;
+}
+
+function naverGuardRecordFailure(detail: string): void {
+  naverGuard.consecutiveFailures += 1;
+  naverGuard.lastError = detail;
+  if (naverGuard.consecutiveFailures >= NAVER_CIRCUIT_FAILURE_THRESHOLD) {
+    naverGuard.openUntil = Date.now() + NAVER_CIRCUIT_OPEN_MS;
+    logger.error(
+      { naverError: detail, circuitOpenUntil: new Date(naverGuard.openUntil).toISOString() },
+      "Naver API circuit opened",
+    );
+  }
+}
+
+function naverGuardRecordSuccess(): void {
+  naverGuard.consecutiveFailures = 0;
+  naverGuard.openUntil = 0;
+  naverGuard.lastError = "";
+}
+
+// 회사명(+지역) 단위 영구 캐시. 지역검색(portal)과 웹/블로그검색(web)은 서로
+// 다른 API이므로 각각 조회 여부를 따로 두고, 이미 조회했던(못 찾은 경우 포함)
+// 회사는 API를 다시 부르지 않는다.
+async function getCachedPortalContact(
+  cacheKey: string,
+): Promise<{ checked: boolean; address?: string; phone?: string }> {
+  const [row] = await db
+    .select()
+    .from(businessContactCacheTable)
+    .where(eq(businessContactCacheTable.cacheKey, cacheKey))
+    .limit(1);
+  if (!row || !row.portalChecked) return { checked: false };
+  return {
+    checked: true,
+    address: row.portalAddress ?? undefined,
+    phone: row.portalPhone ?? undefined,
+  };
+}
+
+async function cachePortalContact(
+  cacheKey: string,
+  result: { address?: string; phone?: string } | null,
+): Promise<void> {
+  await db
+    .insert(businessContactCacheTable)
+    .values({
+      cacheKey,
+      portalChecked: true,
+      portalAddress: result?.address ?? null,
+      portalPhone: result?.phone ?? null,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: businessContactCacheTable.cacheKey,
+      set: {
+        portalChecked: true,
+        portalAddress: result?.address ?? null,
+        portalPhone: result?.phone ?? null,
+        updatedAt: new Date(),
+      },
+    });
+}
+
+async function getCachedWebContact(cacheKey: string): Promise<{ checked: boolean; phone?: string }> {
+  const [row] = await db
+    .select()
+    .from(businessContactCacheTable)
+    .where(eq(businessContactCacheTable.cacheKey, cacheKey))
+    .limit(1);
+  if (!row || !row.webChecked) return { checked: false };
+  return { checked: true, phone: row.webPhone ?? undefined };
+}
+
+async function cacheWebContact(cacheKey: string, phone: string | null): Promise<void> {
+  await db
+    .insert(businessContactCacheTable)
+    .values({
+      cacheKey,
+      webChecked: true,
+      webPhone: phone,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: businessContactCacheTable.cacheKey,
+      set: {
+        webChecked: true,
+        webPhone: phone,
+        updatedAt: new Date(),
+      },
+    });
 }
 
 export async function requestBuffer(url: string, timeoutMs = 45_000, redirects = 0): Promise<{
@@ -691,8 +830,20 @@ export async function searchBusinessContactOnPortal(
   if (!clientId || !clientSecret || !trimmedName || trimmedName === "미공개/확인불가") return null;
   const region = regionHint(knownAddress);
   const query = region ? `${trimmedName} ${region}` : trimmedName;
+  const cacheKey = `${trimmedName}::${region ?? ""}`;
+
+  // 요구사항(2026-09-11): 같은 회사(+지역)는 평생 한 번만 조회한다 — 이미
+  // 조회했던 적이 있으면(못 찾은 경우 포함) 캐시된 값을 그대로 쓰고 API를
+  // 다시 부르지 않는다.
+  const cached = await getCachedPortalContact(cacheKey);
+  if (cached.checked) {
+    return cached.address || cached.phone ? { address: cached.address, phone: cached.phone } : null;
+  }
+  if (!naverGuardAllow()) return null;
+
   try {
     const url = `https://openapi.naver.com/v1/search/local.json?query=${encodeURIComponent(query)}&display=1`;
+    naverGuardRecordCall();
     const response = await fetch(url, {
       headers: {
         "X-Naver-Client-Id": clientId,
@@ -702,29 +853,41 @@ export async function searchBusinessContactOnPortal(
     });
     if (!response.ok) {
       // 200이 아니면 "결과 없음"이 아니라 인증/한도 문제일 수 있으므로, 화면에서는
-      // 조용히 넘어가더라도 로그에는 원인 파악용으로 상태코드를 남긴다.
+      // 조용히 넘어가더라도 로그에는 원인 파악용으로 상태코드를 남긴다. 한도/장애성
+      // 오류일 수 있으므로 캐시에는 남기지 않아 다음에 다시 시도될 수 있게 한다.
+      naverGuardRecordFailure(`HTTP ${response.status} ${response.statusText}`);
       logger.warn(
         { status: response.status, statusText: response.statusText, companyName: trimmedName },
         "Naver local search returned a non-OK response",
       );
       return null;
     }
+    naverGuardRecordSuccess();
     const payload = (await response.json()) as {
       items?: { address?: string; roadAddress?: string; telephone?: string }[];
     };
     const item = payload.items?.[0];
-    if (!item) return null;
+    if (!item) {
+      await cachePortalContact(cacheKey, null);
+      return null;
+    }
     const address = (item.roadAddress || item.address || "").trim();
     const phone = (item.telephone || "").trim();
-    if (!address && !phone) return null;
+    if (!address && !phone) {
+      await cachePortalContact(cacheKey, null);
+      return null;
+    }
     // 지역을 알고 있는데 검색 결과 주소가 그 지역이 아니면(동명 다른 업체일 가능성),
     // 전화번호는 신뢰하지 않고 주소만(있다면) 참고용으로 남긴다.
     const regionMismatch = Boolean(region && address && !address.includes(region.split(" ")[1] ?? region));
     const found: { address?: string; phone?: string } = {};
     if (address) found.address = address;
     if (phone && !regionMismatch) found.phone = phone;
-    return address || found.phone ? found : null;
+    const result = address || found.phone ? found : null;
+    await cachePortalContact(cacheKey, result);
+    return result;
   } catch (error) {
+    naverGuardRecordFailure(describeError(error));
     logger.warn({ err: error, companyName: trimmedName }, "Naver local search failed");
     return null;
   }
@@ -756,8 +919,10 @@ async function searchNaverText(
   const clientId = process.env.NAVER_CLIENT_ID;
   const clientSecret = process.env.NAVER_CLIENT_SECRET;
   if (!clientId || !clientSecret) return [];
+  if (!naverGuardAllow()) return [];
   try {
     const url = `https://openapi.naver.com/v1/search/${endpoint}.json?query=${encodeURIComponent(query)}&display=5`;
+    naverGuardRecordCall();
     const response = await fetch(url, {
       headers: {
         "X-Naver-Client-Id": clientId,
@@ -766,18 +931,21 @@ async function searchNaverText(
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) {
+      naverGuardRecordFailure(`HTTP ${response.status} ${response.statusText}`);
       logger.warn(
         { status: response.status, statusText: response.statusText, endpoint, query },
         "Naver text search returned a non-OK response",
       );
       return [];
     }
+    naverGuardRecordSuccess();
     const payload = (await response.json()) as { items?: { title?: string; description?: string }[] };
     return (payload.items ?? []).map((item) => ({
       title: stripHtml(item.title ?? ""),
       description: stripHtml(item.description ?? ""),
     }));
   } catch (error) {
+    naverGuardRecordFailure(describeError(error));
     logger.warn({ err: error, endpoint, query }, "Naver text search failed");
     return [];
   }
@@ -796,21 +964,47 @@ export async function searchBusinessContactOnWeb(
   if (!process.env.NAVER_CLIENT_ID || !process.env.NAVER_CLIENT_SECRET) return null;
 
   const region = regionHint(knownAddress);
+  const cacheKey = `${trimmedName}::${region ?? ""}`;
+
+  // 요구사항(2026-09-11): 같은 회사(+지역)는 평생 한 번만 조회한다 — 이미
+  // 조회했던 적이 있으면(못 찾은 경우 포함) 캐시된 값을 그대로 쓴다.
+  const cached = await getCachedWebContact(cacheKey);
+  if (cached.checked) {
+    return cached.phone ? { phone: cached.phone } : null;
+  }
+  if (!naverGuardAllow()) return null;
+
   const queries = region ? [`${trimmedName} ${region} 전화번호`, `${trimmedName} 전화번호`] : [`${trimmedName} 전화번호`];
 
-  for (const query of queries) {
+  // 결과가 확정적일 때만(중간에 한도/회로차단으로 못 부른 게 아닐 때만)
+  // "못 찾음"을 캐시한다 — 그래야 일시적 장애로 놓친 경우 다음 스캔에서
+  // 다시 시도된다.
+  let foundPhone: string | undefined;
+  let definitive = true;
+  outer: for (const query of queries) {
     for (const endpoint of ["webkr", "blog"] as const) {
+      if (!naverGuardAllow()) {
+        definitive = false;
+        break outer;
+      }
       const items = await searchNaverText(endpoint, query);
       for (const item of items) {
         const combined = `${item.title} ${item.description}`;
         if (!combined.includes(trimmedName)) continue;
         const phone =
           combined.match(BUSINESS_PHONE_PATTERN)?.[1] ?? combined.match(BUSINESS_PHONE_FALLBACK_PATTERN)?.[0];
-        if (phone) return { phone };
+        if (phone) {
+          foundPhone = phone;
+          break outer;
+        }
       }
     }
   }
-  return null;
+
+  if (definitive) {
+    await cacheWebContact(cacheKey, foundPhone ?? null);
+  }
+  return foundPhone ? { phone: foundPhone } : null;
 }
 
 // Fills in bidderAddress/bidderPhone when the government award record left
