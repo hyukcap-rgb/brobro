@@ -18,4 +18,3 @@ export interface TriggerScanInput {
      */
   endDate?: string;
 }
-
