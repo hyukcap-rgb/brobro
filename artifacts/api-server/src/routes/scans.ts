@@ -80,11 +80,12 @@ router.post("/scans/run", async (req, res) => {
   }
   try {
     const run = await createPendingScanRun("manual", explicitRange);
-    // 요구사항(2026-09-11 사용자 요청: "기간 지정하는 기간 또한 낙찰일을
-    // 기준으로 검색하라는 뜻이야"): explicitRange가 있는 경우(="이 기간으로
-    // 검색")에만 낙찰일 기준 필터링을 적용한다. "지금 실행"(explicitRange 없음)은
-    // 기존 개찰일 기준 로직 그대로 유지.
-    void executeScanRun(run, explicitRange ? { awardDateRange: explicitRange } : undefined).catch((error) => {
+    // 요구사항(2026-09-11 사용자 지적: 나라장터 "검색유형=최종낙찰자" 화면도
+    // 개찰일자로 조회한다 — "최종낙찰자가 있는 건 중 개찰일을 기준으로 검색하면
+    // 모든게 해결되잖아... 모든것의 기준이야"): "지금 실행"과 "이 기간으로 검색"
+    // 모두 개찰일 기준 조회 + 낙찰자 확정 건만 남기는 동일한 기준을 쓰므로 더 이상
+    // 옵션을 분기하지 않는다(daily-scan.ts executeScanRun 참고).
+    void executeScanRun(run).catch((error) => {
       logger.error({ err: error, runId: run.id }, "Manual scan run failed");
     });
     res.status(202).json(serializeRun(run));
