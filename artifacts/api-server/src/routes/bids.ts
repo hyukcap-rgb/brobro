@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Router, type IRouter } from "express";
 import {
   GetBidCollectionStatusParams,
@@ -90,6 +91,18 @@ router.get("/bids/jobs/:jobId/file", async (req, res) => {
   }
   try {
     const filePath = await resolveAttachmentFile(req.params.jobId, notice, relativePath);
+    // 요구사항(2026-09-11 사용자 요청: "첨부파일을 클릭하면 파일 이름이
+    // 이상해. 나라장터에 올라온 파일명 그대로 다운로드 시켜줘"): res.sendFile만
+    // 쓰면 Content-Disposition이 없어, 브라우저가 열 수 없는 형식(예: hwp)은
+    // 미리보기 대신 자동 다운로드되면서 URL 경로("file")를 저장 파일명으로
+    // 써버려 확장자까지 사라진다("이상한 파일"로 보이는 원인). 디스크에 저장된
+    // 파일명(나라장터 원본 파일명을 sanitizeName만 거친 것)을 그대로 저장
+    // 파일명으로 지정하되, PDF 등 미리보기 가능한 형식은 계속 새 탭에서 바로
+    // 열리도록 inline을 쓴다.
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename*=UTF-8''${encodeURIComponent(path.basename(filePath))}`,
+    );
     res.sendFile(filePath);
   } catch (error) {
     res.status(404).json({ error: error instanceof Error ? error.message : "파일을 찾을 수 없습니다." });
