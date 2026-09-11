@@ -91,6 +91,10 @@ function formatAmount(value: number | null | undefined): string {
 function contactSourceLabel(source: string | null | undefined): string | null {
   if (source === "government") return "정부 낙찰기록";
   if (source === "attachment") return "첨부파일에서 추출";
+  // 요구사항(2026-09-11 사용자 요청): 조달청 "나라장터 사용자정보 서비스"로
+  // 사업자등록번호 기준 정확 매칭 조회한 값이라 포털/웹 검색보다 신뢰도가
+  // 높음을 구분해 보여준다.
+  if (source === "registry") return "조달청 등록정보 보강";
   if (source === "portal") return "포털 검색 보완";
   // 요구사항(전화번호 검색 보완, 2026-09-09): 네이버 웹문서/블로그 검색결과
   // 텍스트에서 정규식으로 뽑아낸 번호라 지역검색(portal)보다 정확도가 낮으므로
