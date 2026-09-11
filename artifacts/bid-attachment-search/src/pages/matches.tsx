@@ -469,11 +469,19 @@ export default function Matches() {
           과거의 특정 기간만 자동 보정 없이 정확히 재검색하는 별개 기능이다.
           같은 툴바에 나란히 있어 헷갈렸던 것이므로 동작은 그대로 두고
           레이아웃만 분리해 두 기능이 다르다는 것을 명확히 한다. */}
+          {/* 요구사항(2026-09-11 사용자 요청: "기간 지정하는 기간 또한 낙찰일을
+          기준으로 검색하라는 뜻이야" / "낙찰자가 확정된 건만 검색해야 헷갈리지
+          않는데"): 나라장터 API 자체는 개찰일 기준으로만 조회되지만, "이 기간으로
+          검색"은 지정 기간보다 더 이전까지 넓게 훑은 뒤 실제 낙찰일(확정일)이
+          그 기간 안에 드는 건만 서버에서 걸러서 돌려준다(daily-scan.ts
+          executeScanRun 참고). 아직 낙찰자가 확정되지 않은 공고는 결과에서
+          제외된다. */}
           <div className="rounded-md border bg-muted/30 p-3 space-y-2">
-            <div className="text-sm font-medium">기간 지정 재검색</div>
+            <div className="text-sm font-medium">기간 지정 재검색 (낙찰일 기준)</div>
             <p className="text-xs text-muted-foreground">
-              위 "지금 실행"과 별개로, 지정한 기간만 자동 보정 없이 정확히 다시 검색합니다
-              (시작일=종료일이면 하루만 검색).
+              위 "지금 실행"과 별개로, 지정한 기간 안에 낙찰자가 확정된 공고만 낙찰일 기준으로
+              검색합니다(개찰일이 아닌 낙찰일 기준이며, 시작일=종료일이면 하루만 검색. 아직
+              낙찰자가 확정되지 않은 건은 결과에서 제외됩니다).
             </p>
             <div className="flex items-center gap-2 flex-wrap">
               <Input
