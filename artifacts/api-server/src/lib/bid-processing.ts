@@ -989,10 +989,17 @@ export function extractItemFields(text: string, keywords: readonly string[] = DE
     adjacentSpecification;
   const quantityMatch = text.match(/([0-9][0-9,]*(?:\.[0-9]+)?)\s*(㎡|m²|m|kg|ton|톤|매|개|식)\b/i);
   const amount = text.match(/(?:금액|합계)\s*[:：]?\s*([0-9][0-9,]*)\s*원?/i)?.[1];
+  // 요구사항(2026-09-11 사용자 요청: "일일 검색결과에서 수량에 소숫점 이하가
+  // 무한대일때 무한대로 나오네. 소수점 이하는 절삭해서 보여줘"): 원문 첨부파일
+  // (엑셀→PDF 변환 등)의 부동소수점 오차로 소수점 이하 자릿수가 끝없이 길게
+  // 찍히는 경우가 있어, 화면/CSV에 그대로 노출하면 숫자가 "무한히" 이어지는
+  // 것처럼 보인다. 반올림이 아니라 절삭(소수점 이하 버림)으로 정수부만 남긴다.
+  const rawQuantity = quantityMatch?.[1] ?? adjacentQuantity;
+  const itemQuantity = rawQuantity ? rawQuantity.split(".")[0] : undefined;
   return {
     itemName: keywordIndex >= 0 ? cellValues[keywordIndex] : "미공개/확인불가",
     itemSpecification: specification ?? "미공개/확인불가",
-    itemQuantity: quantityMatch?.[1] ?? adjacentQuantity ?? "미공개/확인불가",
+    itemQuantity: itemQuantity ?? "미공개/확인불가",
     itemUnit: quantityMatch?.[2] ?? (unitIndex >= 0 ? cellValues[unitIndex] : "미공개/확인불가"),
     itemAmount: amount ?? "미공개/확인불가",
   };
