@@ -451,49 +451,62 @@ export default function Matches() {
           <div>
             <CardTitle>자동검색</CardTitle>
             <CardDescription>
-              매일 오전 7시(KST) 자동으로 전일 공고를 검색합니다. 필요하면 지금 바로 실행하거나, 원하는 기간을
-              직접 지정해 다시 검색해볼 수 있습니다 (시작일=종료일이면 하루만 검색). "지금 실행"은 낙찰
-              확정이 며칠씩 늦어지는 경우를 놓치지 않도록 최근 3일을 항상 다시 확인합니다. 아래 기록은
-              최근 7건만 보관되고 이전 기록은 자동 삭제됩니다.
+              매일 오전 7시(KST) 자동으로 전일 공고를 검색합니다. "지금 실행"은 낙찰 확정이 며칠씩 늦어지는
+              경우를 놓치지 않도록 최근 3일을 항상 다시 확인합니다. 아래 기록은 최근 7건만 보관되고 이전
+              기록은 자동 삭제됩니다.
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2 flex-wrap shrink-0">
-            <Input
-              type="date"
-              value={startDate}
-              onChange={(event) => setStartDate(event.target.value)}
-              className="h-9 w-[150px]"
-              aria-label="검색 시작일"
-            />
-            <span className="text-sm text-muted-foreground">~</span>
-            <Input
-              type="date"
-              value={endDate}
-              onChange={(event) => setEndDate(event.target.value)}
-              className="h-9 w-[150px]"
-              aria-label="검색 종료일"
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRunForRange}
-              disabled={triggerScan.isPending || rangeInvalid}
-            >
-              {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarSearch className="h-4 w-4" />}
-              이 기간으로 검색
-            </Button>
-            <Button size="sm" onClick={handleRunNow} disabled={triggerScan.isPending}>
-              {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
-              지금 실행 (최근 3일 재확인)
-            </Button>
-          </div>
+          <Button size="sm" onClick={handleRunNow} disabled={triggerScan.isPending} className="shrink-0">
+            {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
+            지금 실행 (최근 3일 재확인)
+          </Button>
         </CardHeader>
-        <CardContent>
-          {rangeInvalid && startDate && endDate ? (
-            <div className="flex items-center gap-2 text-sm text-destructive mb-3">
-              <AlertCircle className="h-4 w-4" /> 종료일이 시작일보다 빠를 수 없습니다.
+        <CardContent className="space-y-4">
+          {/* 요구사항(2026-09-11 사용자 요청: "이 기간으로 검색과 지금 실행은
+          중복되서 헷갈려"): 두 버튼은 동작이 다르다 — 위 "지금 실행"은 화면의
+          날짜 지정과 무관하게 항상 최근 3일 + 놓친 날짜를 자동으로 채워
+          재확인하는 정기 점검용이고, 아래 "이 기간으로 검색"은 사용자가 지정한
+          과거의 특정 기간만 자동 보정 없이 정확히 재검색하는 별개 기능이다.
+          같은 툴바에 나란히 있어 헷갈렸던 것이므로 동작은 그대로 두고
+          레이아웃만 분리해 두 기능이 다르다는 것을 명확히 한다. */}
+          <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+            <div className="text-sm font-medium">기간 지정 재검색</div>
+            <p className="text-xs text-muted-foreground">
+              위 "지금 실행"과 별개로, 지정한 기간만 자동 보정 없이 정확히 다시 검색합니다
+              (시작일=종료일이면 하루만 검색).
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Input
+                type="date"
+                value={startDate}
+                onChange={(event) => setStartDate(event.target.value)}
+                className="h-9 w-[150px]"
+                aria-label="검색 시작일"
+              />
+              <span className="text-sm text-muted-foreground">~</span>
+              <Input
+                type="date"
+                value={endDate}
+                onChange={(event) => setEndDate(event.target.value)}
+                className="h-9 w-[150px]"
+                aria-label="검색 종료일"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRunForRange}
+                disabled={triggerScan.isPending || rangeInvalid}
+              >
+                {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarSearch className="h-4 w-4" />}
+                이 기간으로 검색
+              </Button>
             </div>
-          ) : null}
+            {rangeInvalid && startDate && endDate ? (
+              <div className="flex items-center gap-2 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4" /> 종료일이 시작일보다 빠를 수 없습니다.
+              </div>
+            ) : null}
+          </div>
           {scans.length === 0 ? (
             <div className="text-sm text-muted-foreground py-4 text-center">실행 기록이 없습니다.</div>
           ) : (
