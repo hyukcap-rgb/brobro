@@ -45,8 +45,16 @@ export class ScanAlreadyRunningError extends Error {
   }
 }
 
+// 실사용 검증(2026-09-11): 동시 실행 두 건을 실제로 겹쳐 보내 확인한 결과, DB
+// 유니크 인덱스 위반은 발생했지만 이 함수가 이를 감지하지 못해 500(진짜 오류)로
+// 새어나갔다 — drizzle-orm(node-postgres)가 실제 pg 오류를 최상위 error.code가
+// 아니라 DrizzleQueryError의 error.cause.code에 담아 던지기 때문이다. 둘 다
+// 확인해야 한다.
 function isUniqueViolation(error: unknown): boolean {
-  return Boolean(error && typeof error === "object" && (error as { code?: string }).code === "23505");
+  const code = (error as { code?: string } | undefined)?.code;
+  if (code === "23505") return true;
+  const cause = (error as { cause?: { code?: string } } | undefined)?.cause;
+  return cause?.code === "23505";
 }
 
 // 요구사항(2026-09-10 사용자 리포트: "부직포 매칭이 하나도 안됨 — 아까는 많았는데"):
