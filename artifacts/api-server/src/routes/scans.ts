@@ -80,7 +80,11 @@ router.post("/scans/run", async (req, res) => {
   }
   try {
     const run = await createPendingScanRun("manual", explicitRange);
-    void executeScanRun(run).catch((error) => {
+    // 요구사항(2026-09-11 사용자 요청: "기간 지정하는 기간 또한 낙찰일을
+    // 기준으로 검색하라는 뜻이야"): explicitRange가 있는 경우(="이 기간으로
+    // 검색")에만 낙찰일 기준 필터링을 적용한다. "지금 실행"(explicitRange 없음)은
+    // 기존 개찰일 기준 로직 그대로 유지.
+    void executeScanRun(run, explicitRange ? { awardDateRange: explicitRange } : undefined).catch((error) => {
       logger.error({ err: error, runId: run.id }, "Manual scan run failed");
     });
     res.status(202).json(serializeRun(run));
