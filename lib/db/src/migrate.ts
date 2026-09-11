@@ -128,6 +128,19 @@ export async function ensureSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- 요구사항(2026-09-11 사용자 요청: 조달청 "조달업체 등록 내역" 공공데이터를
+    -- 알려주며 "기존 낙찰자 정보를 이 API로 보강"해달라고 요청): 조달청
+    -- "나라장터 사용자정보 서비스"(조달업체 기본정보 조회)로 사업자등록번호
+    -- 기준 정확 매칭 조회한 주소/전화번호를 영구 캐시한다. 위 캐시(회사명+
+    -- 지역 기준, 네이버용)와는 조회 기준과 출처가 달라 별도 테이블로 둔다.
+    CREATE TABLE IF NOT EXISTS gov_corp_cache (
+      bizno TEXT PRIMARY KEY,
+      checked BOOLEAN NOT NULL DEFAULT false,
+      address TEXT,
+      phone TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     -- express-session's store (connect-pg-simple) ships a table.sql asset it
     -- reads from disk to create this table on demand ("createTableIfMissing").
     -- That file doesn't survive our esbuild bundling step, so relying on it
