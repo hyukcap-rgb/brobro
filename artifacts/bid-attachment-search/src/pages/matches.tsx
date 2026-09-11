@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   useListMatches,
   useListScans,
@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import {
   Download, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
   MapPin, Phone, CalendarSearch, Search, Paperclip, X, ListFilter, Package,
+  ChevronDown, ChevronRight, ChevronLeft, ArrowUp, ArrowDown, ArrowUpDown,
 } from "lucide-react";
 
 // KST(Asia/Seoul) 기준 "어제" 날짜를 YYYY-MM-DD로 반환한다. 서버의 자동 검색과
@@ -190,6 +191,87 @@ export default function Matches() {
     matchesCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  // 요구사항(2026-09-11 사용자 요청: "검색결과에서 리스트가 너무 끝도없이
+  // 나오는데.. 이걸 좀 효과적으로 정리하는 방법이 없을까" — 사용자가 고른 방식:
+  // 정렬 + 페이지네이션 + 날짜별 접기/펼치기): 결과를 낙찰일 기준으로 묶어
+  // 접고 펼 수 있게 하고, 그 날짜 묶음 단위로 페이지를 나눈다. 정렬 기준으로
+  // 낙찰일을 고르면 날짜 묶음 자체의 순서(최신순/오래된순)가 바뀌고, 규모·
+  // 낙찰자를 고르면 각 날짜 묶음 "안"의 행 순서가 바뀐다.
+  type SortColumn = "awardDate" | "budgetAmount" | "bidderName";
+  const [sortColumn, setSortColumn] = useState<SortColumn>("awardDate");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const toggleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      setSortDir((prevDir) => (prevDir === "asc" ? "desc" : "asc"));
+    } else {
+      setSortColumn(column);
+      setSortDir(column === "bidderName" ? "asc" : "desc");
+    }
+  };
+  const sortIndicator = (column: SortColumn) => {
+    if (sortColumn !== column) return <ArrowUpDown className="h-3 w-3 opacity-40" />;
+    return sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />;
+  };
+
+  // 접힌 날짜 묶음의 집합. 기본은 전부 펼쳐진 상태(기존과 동일하게 모든 결과가
+  // 바로 보임) — 여기 들어있는 날짜만 접혀서 요약 줄만 보인다.
+  const [collapsedDates, setCollapsedDates] = useState<Set<string>>(() => new Set());
+  const toggleDateCollapsed = (dateKey: string) => {
+    setCollapsedDates((prev) => {
+      const next = new Set(prev);
+      if (next.has(dateKey)) next.delete(dateKey);
+      else next.add(dateKey);
+      return next;
+    });
+  };
+
+  const dateGroups = useMemo(() => {
+    const groups = new Map<string, typeof visibleMatches>();
+    for (const match of visibleMatches) {
+      const key = match.awardDate ?? "날짜 미상";
+      const bucket = groups.get(key);
+      if (bucket) bucket.push(match);
+      else groups.set(key, [match]);
+    }
+    const keys = [...groups.keys()].sort((a, b) => {
+      if (a === "날짜 미상") return 1;
+      if (b === "날짜 미상") return -1;
+      if (sortColumn === "awardDate" && sortDir === "asc") return a < b ? -1 : a > b ? 1 : 0;
+      return a > b ? -1 : a < b ? 1 : 0; // 기본(및 규모·낙찰자 정렬 시)은 최신 날짜가 위로
+    });
+    return keys.map((dateKey) => {
+      const items = [...(groups.get(dateKey) ?? [])];
+      if (sortColumn !== "awardDate") {
+        items.sort((x, y) => {
+          let cmp = 0;
+          if (sortColumn === "budgetAmount") {
+            cmp = (x.budgetAmount ?? x.awardAmount ?? 0) - (y.budgetAmount ?? y.awardAmount ?? 0);
+          } else {
+            cmp = (x.bidderName ?? "").localeCompare(y.bidderName ?? "", "ko");
+          }
+          return sortDir === "asc" ? cmp : -cmp;
+        });
+      }
+      return { dateKey, items };
+    });
+  }, [visibleMatches, sortColumn, sortDir]);
+
+  // 요구사항: 날짜 묶음 단위로 페이지를 나눠 한 화면 길이를 제한한다.
+  const DATE_GROUPS_PER_PAGE = 10;
+  const [groupPage, setGroupPage] = useState(0);
+  const totalGroupPages = Math.max(1, Math.ceil(dateGroups.length / DATE_GROUPS_PER_PAGE));
+  const clampedGroupPage = Math.min(groupPage, totalGroupPages - 1);
+  const pageGroups = dateGroups.slice(
+    clampedGroupPage * DATE_GROUPS_PER_PAGE,
+    clampedGroupPage * DATE_GROUPS_PER_PAGE + DATE_GROUPS_PER_PAGE,
+  );
+  const totalVisibleCount = visibleMatches.length;
+  // 다른 실행 기록을 선택하면 완전히 다른 데이터셋이 되므로, 이전 데이터셋
+  // 기준으로 보던 페이지 번호를 그대로 들고 있으면 혼란스럽다 — 새로 1페이지로.
+  useEffect(() => {
+    setGroupPage(0);
+  }, [selectedScanRunId]);
+
   const runScan = (range?: { startDate: string; endDate: string }) => {
     triggerScan.mutate(
       { data: range ? range : {} },
@@ -306,23 +388,73 @@ export default function Matches() {
             // 되어 있어서 너무 보기 힘들어. 엑셀형으로 한줄 형태로 나타내줘"):
             // 카드 그리드 대신 한 행 = 한 매칭 결과인 표 형태로 바꿔서 여러
             // 건을 한 화면에서 스캔하며 비교하기 쉽게 한다.
-            <div className="overflow-x-auto rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>공고번호</TableHead>
-                    <TableHead>낙찰일</TableHead>
-                    <TableHead>키워드 · 수량</TableHead>
-                    <TableHead>낙찰자</TableHead>
-                    <TableHead>규모</TableHead>
-                    <TableHead>주소</TableHead>
-                    <TableHead>연락처</TableHead>
-                    <TableHead>출처</TableHead>
-                    <TableHead>첨부파일</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {visibleMatches.map((match) => (
+            <>
+              <div className="text-xs text-muted-foreground">
+                총 {totalVisibleCount}건 · {dateGroups.length}일
+              </div>
+              <div className="overflow-x-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>공고번호</TableHead>
+                      <TableHead>
+                        <button
+                          type="button"
+                          onClick={() => toggleSort("awardDate")}
+                          className="inline-flex items-center gap-1 hover:text-foreground"
+                        >
+                          낙찰일 {sortIndicator("awardDate")}
+                        </button>
+                      </TableHead>
+                      <TableHead>키워드 · 수량</TableHead>
+                      <TableHead>
+                        <button
+                          type="button"
+                          onClick={() => toggleSort("bidderName")}
+                          className="inline-flex items-center gap-1 hover:text-foreground"
+                        >
+                          낙찰자 {sortIndicator("bidderName")}
+                        </button>
+                      </TableHead>
+                      <TableHead>
+                        <button
+                          type="button"
+                          onClick={() => toggleSort("budgetAmount")}
+                          className="inline-flex items-center gap-1 hover:text-foreground"
+                        >
+                          규모 {sortIndicator("budgetAmount")}
+                        </button>
+                      </TableHead>
+                      <TableHead>주소</TableHead>
+                      <TableHead>연락처</TableHead>
+                      <TableHead>출처</TableHead>
+                      <TableHead>첨부파일</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pageGroups.map(({ dateKey, items }) => {
+                      const isCollapsed = collapsedDates.has(dateKey);
+                      return (
+                        <Fragment key={dateKey}>
+                          <TableRow className="bg-muted/40 hover:bg-muted/40">
+                            <TableCell colSpan={9} className="py-2">
+                              <button
+                                type="button"
+                                onClick={() => toggleDateCollapsed(dateKey)}
+                                className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-primary"
+                              >
+                                {isCollapsed ? (
+                                  <ChevronRight className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4" />
+                                )}
+                                {dateKey} ({items.length}건)
+                              </button>
+                            </TableCell>
+                          </TableRow>
+                          {isCollapsed
+                            ? null
+                            : items.map((match) => (
                     <TableRow key={match.id}>
                       <TableCell className="font-mono text-xs whitespace-nowrap">{match.noticeNumber}</TableCell>
                       <TableCell className="text-xs whitespace-nowrap">{match.awardDate ?? "-"}</TableCell>
@@ -438,10 +570,43 @@ export default function Matches() {
                         )}
                       </TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                          ))}
+                        </Fragment>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              {totalGroupPages > 1 ? (
+                <div className="flex items-center justify-between text-sm text-muted-foreground pt-1">
+                  <span>
+                    {clampedGroupPage * DATE_GROUPS_PER_PAGE + 1}–
+                    {Math.min((clampedGroupPage + 1) * DATE_GROUPS_PER_PAGE, dateGroups.length)} / {dateGroups.length}일
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setGroupPage((p) => Math.max(0, p - 1))}
+                      disabled={clampedGroupPage === 0}
+                    >
+                      <ChevronLeft className="h-4 w-4" /> 이전
+                    </Button>
+                    <span>
+                      {clampedGroupPage + 1} / {totalGroupPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setGroupPage((p) => Math.min(totalGroupPages - 1, p + 1))}
+                      disabled={clampedGroupPage >= totalGroupPages - 1}
+                    >
+                      다음 <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </>
           )}
         </CardContent>
       </Card>
