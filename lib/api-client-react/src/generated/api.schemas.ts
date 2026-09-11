@@ -180,6 +180,7 @@ export type BidSearchResultContactSource = typeof BidSearchResultContactSource[k
 export const BidSearchResultContactSource = {
   government: 'government',
   attachment: 'attachment',
+  registry: 'registry',
   portal: 'portal',
   web: 'web',
 } as const;
@@ -358,7 +359,7 @@ export interface AwardedMatch {
   /** @nullable */
   bidderPhone?: string | null;
   /**
-     * 낙찰자 연락처/주소의 출처 (government/attachment/portal).
+     * 낙찰자 연락처/주소의 출처 (government/attachment/registry/portal/web).
      * @nullable
      */
   contactSource?: string | null;
@@ -420,11 +421,6 @@ export const ScanRunTriggerType = {
   schedule: 'schedule',
   manual: 'manual',
 } as const;
-
-export interface TriggerScanInput {
-  /** @pattern ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ */
-  date?: string;
-}
 
 export interface ScanRun {
   id: number;
