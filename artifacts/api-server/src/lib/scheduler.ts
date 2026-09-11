@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import { runDailyScan } from "./daily-scan";
+import { runDailyScan, ScanAlreadyRunningError } from "./daily-scan";
 import { runAttachmentCleanup } from "./attachment-cleanup";
 import { logger } from "./logger";
 import { KST_TIME_ZONE } from "./kr-holidays";
@@ -16,6 +16,12 @@ export function startDailyScanScheduler(): void {
     () => {
       logger.info("일별 낙찰 공고 스캔 시작 (스케줄)");
       runDailyScan("schedule").catch((error) => {
+        // 요구사항(2026-09-11): 수동 실행과 겹쳐서 거절된 것은 오류가 아니라
+        // 정상적인 동시실행 방지 동작이므로 error가 아닌 info로 남긴다.
+        if (error instanceof ScanAlreadyRunningError) {
+          logger.info("일별 낙찰 공고 스캔 건너뜀 (이미 다른 스캔이 진행 중, 스케줄)");
+          return;
+        }
         logger.error({ err: error }, "일별 낙찰 공고 스캔 실패 (스케줄)");
       });
     },
