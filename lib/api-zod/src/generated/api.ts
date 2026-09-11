@@ -113,7 +113,7 @@ export const ListMatchesResponse = zod.object({
   "bidderBizno": zod.string().nullish(),
   "bidderAddress": zod.string().nullish(),
   "bidderPhone": zod.string().nullish(),
-  "contactSource": zod.string().nullish().describe('낙찰자 연락처\/주소의 출처 (government\/attachment\/portal).'),
+  "contactSource": zod.string().nullish().describe('낙찰자 연락처\/주소의 출처 (government\/attachment\/registry\/portal\/web).'),
   "budgetAmount": zod.number().nullish(),
   "estimatedAmount": zod.number().nullish(),
   "awardAmount": zod.number().nullish(),
@@ -369,7 +369,7 @@ export const GetBidCollectionStatusResponse = zod.object({
   "baseAmount": zod.string().optional(),
   "constructionOverview": zod.string().optional(),
   "awardStatus": zod.enum(['confirmed', 'not_found']).optional(),
-  "contactSource": zod.enum(['government', 'attachment', 'portal', 'web']).optional().describe('Where bidderAddress\/bidderPhone ultimately came from, when found beyond the base award record.')
+  "contactSource": zod.enum(['government', 'attachment', 'registry', 'portal', 'web']).optional().describe('Where bidderAddress\/bidderPhone ultimately came from, when found beyond the base award record.')
 })),
   "keywords": zod.array(zod.string()),
   "reusedFromJobId": zod.string().nullable(),
