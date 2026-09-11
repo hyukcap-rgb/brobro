@@ -84,15 +84,29 @@ function extractOpenApiErrorMessage(bodyText: string): string | null {
   return xmlMatch ? xmlMatch[1] : null;
 }
 
-// 요구사항(재확인, 2026-09-08 사용자 확인): 나라장터의 "최종낙찰자" 데이터는
-// 개찰일이 지나도 몇 시간~며칠에 걸쳐 점진적으로 확정되어, 이미 "완료"로 기록된
-// 날짜라도 다시 스캔하면 새로 확정된 낙찰건이 추가로 나타날 수 있다. 기존
-// 갭필 로직은 "완료"로 기록된 날짜는 다시 보지 않으므로, 이런 뒤늦은 확정
-// 건들은 영구적으로 누락될 수 있었다 — 이를 막기 위해 매 실행마다 최근
-// N일(어제/그저께/그끄제)을 완료 여부와 무관하게 항상 다시 훑는다.
-// awardedMatchesTable insert는 onConflictDoNothing()이라 중복 저장 걱정 없이
-// 안전하게 재확인할 수 있다.
-const RECHECK_WINDOW_DAYS = 3;
+// 요구사항(2026-09-11 사용자 재지적: "입찰,개찰,낙찰 3가지를 정확히 구분해야
+// 한다 — 자동검색이든 기간 지정 재검색이든 모든 검색의 기준은 낙찰일이다.
+// 낙찰이 안 된 건에서 키워드를 검색할 필요 없다. 낙찰 된 건 >> 키워드가
+// 있는 건, 이 순서대로 하라"): 나라장터 낙찰정보 API는 개찰일시로만 조회할
+// 수 있고 낙찰일(최종낙찰자 확정일, fnlSucsfDate) 기준 조회를 지원하지
+// 않는다. "어제 낙찰된 건"을 정확히 찾으려면, 대상 낙찰일보다 이만큼 더
+// 이전 개찰일까지 넓게 훑은 뒤(개찰과 낙찰 확정 사이에 며칠씩 지연이 흔하다),
+// 그중 실제 낙찰일이 대상 날짜에 해당하는 것만 남겨야 한다 — 자동 스캔(매일
+// 07시)·"지금 실행"·"기간 지정 재검색" 전부 이 기준 하나로 통일한다(바로
+// 아래 executeScanRun의 fetchDates/confirmedAwards 참고). 이 방식이 아래
+// RECHECK_WINDOW_DAYS 역할(뒤늦게 확정되는 낙찰 건을 놓치지 않는 것)까지
+// 함께 해결하므로 그 로직은 제거한다.
+const AWARD_DATE_LOOKBACK_DAYS = 14;
+
+// 나라장터 날짜 필드는 "YYYY-MM-DD" 또는 "YYYY-MM-DD HH:MI:SS" 형태로 온다.
+// 앞 10자리만 취해 날짜 키로 비교한다(문자열 사전식 비교 = 날짜순 비교가 그대로
+// 성립하는 "YYYY-MM-DD" 형식이므로).
+function extractDateKey(raw: unknown): string | null {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return null;
+  const key = trimmed.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : null;
+}
 
 // 업무구분(사업 종류)별 나라장터 OpenAPI 엔드포인트. 조달청이 물품(Thng)/
 // 용역(Servc)/공사(Cnstwk)를 각각 별도 오퍼레이션으로 제공하기 때문에, 사용자가
@@ -191,24 +205,13 @@ async function getMostRecentCoveredDateKey(): Promise<string | null> {
 // 빠짐없이 훑어 대상 날짜에 포함시킨다(정상적인 하루 1건 운영 시에는 결과가
 // computeTargetDates()와 동일 — 즉, 기존 동작을 바꾸지 않으면서 장애 이후에는
 // 자동으로 밀린 날짜를 채워 넣는다).
-function computeRecheckDates(instant: Date): KstDate[] {
-  const today = kstToday(instant);
-  const dates: KstDate[] = [];
-  for (let i = 1; i <= RECHECK_WINDOW_DAYS; i++) {
-    dates.push(shiftKstDate(today, -i));
-  }
-  return dates;
-}
-
-// 완료 여부와 무관하게 항상 재확인할 최근 N일을 base 날짜 목록에 합친다(중복은
-// key 기준으로 제거, 날짜순 정렬). explicitDateKey로 특정 날짜만 지정한
-// 수동검색 경로(createPendingScanRun)는 이 함수를 거치지 않으므로 영향받지 않는다.
-function withRecheckWindow(baseDates: KstDate[], instant: Date): KstDate[] {
-  const merged = new Map<string, KstDate>();
-  for (const date of [...baseDates, ...computeRecheckDates(instant)]) merged.set(date.key, date);
-  return [...merged.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-}
-
+//
+// 요구사항(2026-09-11): 예전에는 여기에 더해 "최근 3일을 완료 여부와 무관하게
+// 항상 재확인"하는 RECHECK_WINDOW_DAYS 로직이 있었다 — 낙찰 확정이 개찰 후
+// 며칠씩 늦어지는 걸 놓치지 않기 위해서였다. 이제는 모든 검색 기준이 애초에
+// "낙찰일"이고(executeScanRun의 AWARD_DATE_LOOKBACK_DAYS 참고), 매일 그 날의
+// 낙찰일을 찾을 때 개찰일 기준 최대 14일을 되짚어 확인하므로 이 문제가 이미
+// 해결된다 — 별도의 재확인 로직이 더 이상 필요 없다.
 export async function computeTargetDatesWithGapFill(instant: Date = new Date()): Promise<KstDate[]> {
   const today = kstToday(instant);
   const yesterday = shiftKstDate(today, -1);
@@ -216,14 +219,14 @@ export async function computeTargetDatesWithGapFill(instant: Date = new Date()):
 
   if (!lastCoveredKey) {
     // 완료된 실행 기록이 아직 없다(최초 실행). 기존 로직 그대로.
-    return withRecheckWindow(computeTargetDates(instant), instant);
+    return computeTargetDates(instant);
   }
 
   const lastCovered = kstDateFromKey(lastCoveredKey);
   if (lastCovered.key >= yesterday.key) {
     // 이미 어제까지(혹은 수동 재실행 등으로 그 이후까지) 커버되어 있다 — 손실
     // 구간 없음. 기존 로직(월요일/공휴일 다음날 이중 확인 포함) 그대로 수행한다.
-    return withRecheckWindow(computeTargetDates(instant), instant);
+    return computeTargetDates(instant);
   }
 
   // lastCovered 다음날부터 어제까지 공백을 전부 채운다.
@@ -247,7 +250,7 @@ export async function computeTargetDatesWithGapFill(instant: Date = new Date()):
     );
   }
 
-  return withRecheckWindow(dates, instant);
+  return dates;
 }
 
 async function fetchAwardsForDate(date: KstDate, source: WorkSource): Promise<Record<string, unknown>[]> {
@@ -604,21 +607,30 @@ export async function createPendingScanRun(
   return run;
 }
 
-// 요구사항(2026-09-11 사용자 지적: 나라장터 화면 캡처 — "검색유형"에 이미
-// "최종낙찰자"가 있고, 그 탭도 날짜는 개찰일자 기준으로 조회한다며 "최종낙찰자가
-// 있는 건 중 개찰일을 기준으로 검색하면 모든게 해결되잖아... 모든것의 기준이야"):
-// 이전에는 "이 기간으로 검색"만 낙찰일(확정일) 기준으로 동작하도록 시작일을
-// 14일 앞당겨 넓게 조회한 뒤 fnlSucsfDate로 다시 걸러냈으나, 나라장터 공식
-// 화면의 "최종낙찰자" 검색 유형과 동일하게 개찰일 기준으로만 조회하고 그중
-// 낙찰자가 확정된 건만 남기는 것으로 통일한다(아래 confirmedAwards 필터).
-// "지금 실행"과 "이 기간으로 검색" 모두 이 하나의 기준을 따른다 — 더 이상 두
-// 흐름을 구분할 필요가 없다.
+// 요구사항(2026-09-11 사용자 재지적: "입찰,개찰,낙찰 3가지를 정확히 구분해야
+// 한다 — 자동검색이든 기간 지정 재검색이든 모든 검색의 기준은 낙찰일이다.
+// 낙찰이 안 된 건에서 키워드를 검색할 필요 없다. 낙찰 된 건 >> 키워드가
+// 있는 건, 이 순서대로 하라"): 나라장터 낙찰정보 API는 개찰일자로만 조회할 수
+// 있으므로, run.targetDates(찾고자 하는 낙찰일들)보다 최대
+// AWARD_DATE_LOOKBACK_DAYS일 더 이전 개찰일까지 넓게 훑어 후보를 가져온 뒤,
+// 그중 실제 낙찰일(fnlSucsfDate)이 targetDates에 해당하는 것만 남긴다(아래
+// confirmedAwards 필터). 자동 스캔(매일 07시)·"지금 실행"·"기간 지정 재검색"
+// 전부 이 하나의 로직(executeScanRun)을 공유하므로 기준이 항상 낙찰일로
+// 통일된다 — 더 이상 흐름별로 구분할 필요가 없다.
 export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
   const settings = await getAppSettings();
-  const fetchDates = run.targetDates.map((key) => {
-    const [year, month, day] = key.split("-").map(Number);
-    return { key, compact: key.replaceAll("-", ""), year, month, day, weekday: 0 } as KstDate;
-  });
+  const targetDateKeys = run.targetDates;
+  const targetDateSet = new Set(targetDateKeys);
+  const minTargetKey = targetDateKeys.reduce(
+    (min, key) => (key < min ? key : min),
+    targetDateKeys[0] ?? kstToday(new Date()).key,
+  );
+  const maxTargetKey = targetDateKeys.reduce(
+    (max, key) => (key > max ? key : max),
+    targetDateKeys[0] ?? minTargetKey,
+  );
+  const lookbackStartKey = shiftKstDate(kstDateFromKey(minTargetKey), -AWARD_DATE_LOOKBACK_DAYS).key;
+  const fetchDates = targetDateKeys.length > 0 ? buildDateRange(lookbackStartKey, maxTargetKey) : [];
   const workSources = resolveWorkSources(settings.workCategories);
 
   let awardsFound = 0;
@@ -677,9 +689,16 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           logger.warn({ err: error, source, date: date.key }, "일별 스캔: 낙찰 목록 조회 실패");
         }
       }
-      // 요구사항: 나라장터 "최종낙찰자" 검색 유형과 동일하게, 개찰일 기준으로
-      // 조회한 후보 중 최종 낙찰자가 확정된 공고만 남긴다.
-      const confirmedAwards = awardItems.filter((item) => String(item.bidwinnrNm ?? "").trim().length > 0);
+      // 요구사항: 낙찰자가 확정되어 있고(bidwinnrNm), 그 낙찰일(fnlSucsfDate)이
+      // 실제로 찾고자 하는 날짜(targetDateSet)에 해당하는 건만 남긴다 — 개찰일
+      // 기준으로 넓게 훑어온 후보 중 "낙찰 된 건"만, 그것도 요청받은 낙찰일의
+      // 것만 걸러내는 단계 (키워드 검색은 이 다음 단계에서 진행 — "낙찰 된
+      // 건 >> 키워드가 있는 건" 순서).
+      const confirmedAwards = awardItems.filter((item) => {
+        if (String(item.bidwinnrNm ?? "").trim().length === 0) return false;
+        const awardDateKey = extractDateKey(item.fnlSucsfDate);
+        return awardDateKey !== null && targetDateSet.has(awardDateKey);
+      });
       awardsFound += confirmedAwards.length;
 
       // 예산(공사 규모) 사전 필터: 상세 조회는 비용이 크므로, 낙찰금액(통상 예산의
