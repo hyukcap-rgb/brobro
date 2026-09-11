@@ -15,6 +15,7 @@ export type BidSearchResultContactSource = typeof BidSearchResultContactSource[k
 export const BidSearchResultContactSource = {
   government: 'government',
   attachment: 'attachment',
+  registry: 'registry',
   portal: 'portal',
   web: 'web',
 } as const;
