@@ -1223,6 +1223,7 @@ export default function Home() {
                                           <span className="text-muted-foreground">연락처 출처</span>{' '}
                                           {res.contactSource === 'government' && '나라장터 낙찰정보'}
                                           {res.contactSource === 'attachment' && '첨부파일에서 추출'}
+                                          {res.contactSource === 'registry' && '조달청 등록정보 보강'}
                                           {res.contactSource === 'portal' && '포털 검색 보완'}
                                           {res.contactSource === 'web' && '웹 검색 추정(확인 필요)'}
                                           {!res.contactSource && (res.bidderPhone && res.bidderPhone !== '미공개/확인불가' ? '확인됨' : '미확인')}
