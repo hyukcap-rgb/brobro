@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { GetScanParams, ListScansQueryParams, TriggerScanBody } from "@workspace/api-zod";
 import { deleteAllScanData, getScanRun, listScanRuns } from "../lib/matches-store";
-import { createPendingScanRun, executeScanRun } from "../lib/daily-scan";
+import { createPendingScanRun, executeScanRun, ScanAlreadyRunningError } from "../lib/daily-scan";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -85,6 +85,12 @@ router.post("/scans/run", async (req, res) => {
     });
     res.status(202).json(serializeRun(run));
   } catch (error) {
+    if (error instanceof ScanAlreadyRunningError) {
+      // 요구사항(2026-09-11): 동시 실행을 API 호출 낭비 없이 막았다는 신호이지
+      // 서버 오류가 아니므로 500이 아닌 409(Conflict)로 명확히 구분한다.
+      res.status(409).json({ error: "이미 다른 스캔이 진행 중입니다. 완료된 후 다시 시도해 주세요." });
+      return;
+    }
     logger.error({ err: error }, "Could not start manual scan");
     res.status(500).json({ error: error instanceof Error ? error.message : "스캔을 시작하지 못했습니다." });
   }
