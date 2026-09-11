@@ -666,7 +666,7 @@ components:
         contactSource:
           type: string
           description: Where bidderAddress/bidderPhone ultimately came from, when found beyond the base award record.
-          enum: [government, attachment, portal, web]
+          enum: [government, attachment, registry, portal, web]
       required:
         - noticeNumber
         - noticeName
@@ -829,7 +829,7 @@ components:
           type: ["string", "null"]
         contactSource:
           type: ["string", "null"]
-          description: 낙찰자 연락처/주소의 출처 (government/attachment/portal).
+          description: 낙찰자 연락처/주소의 출처 (government/attachment/registry/portal/web).
         budgetAmount:
           type: ["number", "null"]
         estimatedAmount:
