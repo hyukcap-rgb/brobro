@@ -962,8 +962,14 @@ async function fetchAwards(targets: Set<string>): Promise<Map<string, Record<str
 }
 
 export function extractItemFields(text: string, keywords: readonly string[] = DEFAULT_KEYWORDS): Pick<SearchResult, "itemName" | "itemSpecification" | "itemQuantity" | "itemUnit" | "itemAmount"> {
+  // xlsx cells arrive already joined as "A1=텍스트 | B1=텍스트" (see extractXlsx's
+  // itemContext), but text pulled from a PDF/HWP/DOCX table row has no "|" —
+  // it is one flat line such as "부직포설치\t1Ton/m\t11.7\t㎡" where the columns
+  // are separated by tabs or runs of 2+ spaces (pdftotext -layout). Split on
+  // those too so a spec/rate cell like "1Ton/m" doesn't get lumped together
+  // with the real quantity/unit cells that follow it.
   const cellValues = text
-    .split("|")
+    .split(text.includes("|") ? "|" : /\t+|\s{2,}/)
     .map((part) => part.trim().replace(/^[A-Z]+\d+=/, "").trim())
     .filter(Boolean);
   const keywordIndex = cellValues.findIndex((value) => keywords.some((keyword) => value.includes(keyword)));
@@ -987,7 +993,24 @@ export function extractItemFields(text: string, keywords: readonly string[] = DE
     text.match(/(?:규격|두께|폭|길이)\s*[:：]?\s*([0-9.,]+\s*(?:mm|cm|m|㎡|m²|g\/㎡|kg\/㎡))/i)?.[1] ??
     text.match(/[0-9.,]+\s*(?:mm|cm|g\/㎡|kg\/㎡)/i)?.[0] ??
     adjacentSpecification;
-  const quantityMatch = text.match(/([0-9][0-9,]*(?:\.[0-9]+)?)\s*(㎡|m²|m|kg|ton|톤|매|개|식)\b/i);
+  // 요구사항(2026-09-12 사용자 리포트: R26BK01648131-000 공고 — 첨부파일의
+  // "부직포설치	1Ton/m	11.7	㎡"에서 실제 수량인 "11.7 ㎡"를 찾아야 하는데
+  // "1Ton/m"의 "1"+"Ton"이 먼저 매칭돼 엉뚱하게 "1 Ton"으로 표시됐음):
+  // 단위 바로 뒤에 "/"가 오는 표현("1Ton/m", "5kg/㎡" 등)은 실제 수량이 아니라
+  // 규격/단가성 비율 표기이므로 후보에서 제외하고, 그 뒤에 나오는 진짜
+  // 수량+단위(예: "11.7 ㎡")를 찾는다. 또한 원래 정규식의 "\b"는 "㎡"·"m²"
+  // 같은 기호 문자를 단어문자로 취급하지 않아 뒤에 아무것도 없어도 항상
+  // 매칭에 실패했으므로(예: "500 ㎡" 전체가 무시됨), 숫자/영문/한글이 바로
+  // 뒤따르지 않는지를 직접 확인하는 방식으로 대체한다.
+  const UNIT_ALTERNATION = "㎡|m²|m2|M2|m|kg|ton|톤|매|개|식";
+  const quantityMatch = [
+    ...text.matchAll(
+      new RegExp(
+        `([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*(${UNIT_ALTERNATION})(?!\\s*/)(?![0-9A-Za-z가-힣])`,
+        "gi",
+      ),
+    ),
+  ][0];
   const amount = text.match(/(?:금액|합계)\s*[:：]?\s*([0-9][0-9,]*)\s*원?/i)?.[1];
   // 요구사항(2026-09-11 사용자 요청: "일일 검색결과에서 수량에 소숫점 이하가
   // 무한대일때 무한대로 나오네. 소수점 이하는 절삭해서 보여줘"): 원문 첨부파일
