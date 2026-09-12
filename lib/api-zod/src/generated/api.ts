@@ -54,6 +54,7 @@ export const GetSettingsResponse = zod.object({
   "minEstimatedPrice": zod.number().nullish(),
   "maxEstimatedPrice": zod.number().nullish(),
   "minBudgetAmount": zod.number(),
+  "notificationEmails": zod.array(zod.string()).describe('매일 07시(KST) 자동 검색이 끝나면 결과 요약 메일을 받을 주소 목록. 그날 새로 발견된 매칭이 있을 때만 발송한다.'),
   "updatedAt": zod.string()
 })
 
@@ -77,7 +78,8 @@ export const UpdateSettingsBody = zod.object({
   "workCategories": zod.array(zod.enum(['물품', '일반용역', '기술용역', '공사'])).min(1).optional(),
   "minEstimatedPrice": zod.number().min(updateSettingsBodyMinEstimatedPriceMin).nullish(),
   "maxEstimatedPrice": zod.number().min(updateSettingsBodyMaxEstimatedPriceMin).nullish(),
-  "minBudgetAmount": zod.number().min(updateSettingsBodyMinBudgetAmountMin).optional()
+  "minBudgetAmount": zod.number().min(updateSettingsBodyMinBudgetAmountMin).optional(),
+  "notificationEmails": zod.array(zod.string()).optional()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -87,6 +89,7 @@ export const UpdateSettingsResponse = zod.object({
   "minEstimatedPrice": zod.number().nullish(),
   "maxEstimatedPrice": zod.number().nullish(),
   "minBudgetAmount": zod.number(),
+  "notificationEmails": zod.array(zod.string()).describe('매일 07시(KST) 자동 검색이 끝나면 결과 요약 메일을 받을 주소 목록. 그날 새로 발견된 매칭이 있을 때만 발송한다.'),
   "updatedAt": zod.string()
 })
 
