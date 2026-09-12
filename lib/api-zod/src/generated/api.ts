@@ -109,6 +109,7 @@ export const ListMatchesResponse = zod.object({
   "noticeName": zod.string().nullish(),
   "siteName": zod.string().nullish(),
   "siteOffice": zod.string().nullish(),
+  "siteAddress": zod.string().nullish().describe('실제 공사가 이뤄지는 현장 주소(첨부파일에 명시된 값 우선, 없으면 나라장터 공사현장지역명). 낙찰자의 사업자 소재지(bidderAddress)와는 다르다.'),
   "workTypeName": zod.string().nullish(),
   "workCategory": zod.string().nullish().describe('이 공고를 찾아낸 업무구분(물품\/용역\/공사).'),
   "demandAgency": zod.string().nullish(),
