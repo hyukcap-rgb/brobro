@@ -21,6 +21,8 @@ export const awardedMatchesTable = pgTable(
     noticeName: text("notice_name"),
     siteName: text("site_name"),
     siteOffice: text("site_office"),
+    // 실제 공사현장 위치(사업자 소재지인 bidderAddress와는 다름). daily-scan.ts 참고.
+    siteAddress: text("site_address"),
     workTypeName: text("work_type_name"),
     // 이 공고를 어떤 업무구분 API(물품/용역/공사)로 찾았는지.
     workCategory: text("work_category"),
