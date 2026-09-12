@@ -16,6 +16,7 @@ import {
   Download, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
   MapPin, Phone, CalendarSearch, Search, Paperclip, X, ListFilter, Package,
   ChevronDown, ChevronRight, ChevronLeft, ArrowUp, ArrowDown, ArrowUpDown,
+  Copy, Check,
 } from "lucide-react";
 
 // KST(Asia/Seoul) 기준 "어제" 날짜를 YYYY-MM-DD로 반환한다. 서버의 자동 검색과
@@ -90,21 +91,6 @@ function formatAmount(value: number | null | undefined): string {
   return `${value.toLocaleString("ko-KR")}원`;
 }
 
-function contactSourceLabel(source: string | null | undefined): string | null {
-  if (source === "government") return "정부 낙찰기록";
-  if (source === "attachment") return "첨부파일에서 추출";
-  // 요구사항(2026-09-11 사용자 요청): 조달청 "나라장터 사용자정보 서비스"로
-  // 사업자등록번호 기준 정확 매칭 조회한 값이라 포털/웹 검색보다 신뢰도가
-  // 높음을 구분해 보여준다.
-  if (source === "registry") return "조달청 등록정보 보강";
-  if (source === "portal") return "포털 검색 보완";
-  // 요구사항(전화번호 검색 보완, 2026-09-09): 네이버 웹문서/블로그 검색결과
-  // 텍스트에서 정규식으로 뽑아낸 번호라 지역검색(portal)보다 정확도가 낮으므로
-  // "추정"이라고 명시해 화면에서 신뢰도를 구분할 수 있게 한다.
-  if (source === "web") return "웹 검색 추정(확인 필요)";
-  return null;
-}
-
 function telHref(phone: string): string {
   return `tel:${phone.replace(/[^0-9+]/g, "")}`;
 }
@@ -125,6 +111,61 @@ function isUsablePhone(phone: string | null | undefined): boolean {
 // 찾아볼 수 있도록 낙찰자명을 새 탭에서 열리는 네이버 검색 링크로 만든다.
 function naverSearchHref(query: string): string {
   return `https://search.naver.com/search.naver?query=${encodeURIComponent(`${query} 전화번호`)}`;
+}
+
+// 요구사항(2026-09-12 사용자 요청: "공고번호는 복사하기 버튼만 놔두고 다
+// 안보이게 해줘"): 표에서 공고번호 텍스트 자체는 더 이상 노출하지 않고,
+// 필요할 때 눌러서 클립보드로 복사할 수 있는 버튼만 남긴다.
+function CopyNoticeNumberButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        throw new Error("Clipboard API 사용 불가");
+      }
+    } catch {
+      // 클립보드 API를 쓸 수 없는 환경(비보안 컨텍스트 등)을 위한 대체 수단.
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
+      } catch {
+        document.body.removeChild(textarea);
+        return;
+      }
+      document.body.removeChild(textarea);
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title="공고번호 복사"
+      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground whitespace-nowrap"
+    >
+      {copied ? (
+        <>
+          <Check className="h-3.5 w-3.5" />
+          복사됨
+        </>
+      ) : (
+        <>
+          <Copy className="h-3.5 w-3.5" />
+          복사
+        </>
+      )}
+    </button>
+  );
 }
 
 function scanStatusBadge(status: string) {
@@ -427,7 +468,6 @@ export default function Matches() {
                       </TableHead>
                       <TableHead>주소</TableHead>
                       <TableHead>연락처</TableHead>
-                      <TableHead>출처</TableHead>
                       <TableHead>첨부파일</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -437,7 +477,7 @@ export default function Matches() {
                       return (
                         <Fragment key={dateKey}>
                           <TableRow className="bg-muted/40 hover:bg-muted/40">
-                            <TableCell colSpan={9} className="py-2">
+                            <TableCell colSpan={8} className="py-2">
                               <button
                                 type="button"
                                 onClick={() => toggleDateCollapsed(dateKey)}
@@ -456,7 +496,9 @@ export default function Matches() {
                             ? null
                             : items.map((match) => (
                     <TableRow key={match.id}>
-                      <TableCell className="font-mono text-xs whitespace-nowrap">{match.noticeNumber}</TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <CopyNoticeNumberButton value={match.noticeNumber} />
+                      </TableCell>
                       <TableCell className="text-xs whitespace-nowrap">{match.awardDate ?? "-"}</TableCell>
                       {/* 요구사항(2026-09-10 사용자 요청: "검색 결과에
                       키워드/수량을 꼭 함께 넣어줘. 이게 가장 중요해. 이걸
@@ -529,15 +571,6 @@ export default function Matches() {
                             </button>
                           ) : null}
                         </div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {contactSourceLabel(match.contactSource) ? (
-                          <Badge variant="outline" className="text-[10px] font-normal">
-                            {contactSourceLabel(match.contactSource)}
-                          </Badge>
-                        ) : (
-                          "-"
-                        )}
                       </TableCell>
                       {/* 요구사항(2026-09-10 사용자 요청 1, 2: "키워드가 나온
                       파일은 다운로드 해서 우리 서버에 저장해줘" / "저장된
