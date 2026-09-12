@@ -25,4 +25,5 @@ export interface AppSettingsInput {
   maxEstimatedPrice?: number | null;
   /** @minimum 0 */
   minBudgetAmount?: number;
+  notificationEmails?: string[];
 }
