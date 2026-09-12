@@ -34,6 +34,7 @@ export interface AppSettingsView {
   minEstimatedPrice: number | null;
   maxEstimatedPrice: number | null;
   minBudgetAmount: number;
+  notificationEmails: string[];
   updatedAt: string;
 }
 
@@ -44,6 +45,7 @@ function toView(row: {
   minEstimatedPrice: number | null;
   maxEstimatedPrice: number | null;
   minBudgetAmount: number;
+  notificationEmails: string[];
   updatedAt: Date;
 }): AppSettingsView {
   return {
@@ -53,6 +55,7 @@ function toView(row: {
     minEstimatedPrice: row.minEstimatedPrice ?? null,
     maxEstimatedPrice: row.maxEstimatedPrice ?? null,
     minBudgetAmount: row.minBudgetAmount,
+    notificationEmails: row.notificationEmails ?? [],
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -68,6 +71,7 @@ export async function getAppSettings(): Promise<AppSettingsView> {
       workTypeKeywords: DEFAULT_WORK_TYPE_KEYWORDS,
       workCategories: DEFAULT_WORK_CATEGORIES,
       minBudgetAmount: DEFAULT_MIN_BUDGET,
+      notificationEmails: [],
     })
     .onConflictDoNothing()
     .returning();
@@ -85,6 +89,7 @@ export interface UpdateSettingsInput {
   minEstimatedPrice?: number | null;
   maxEstimatedPrice?: number | null;
   minBudgetAmount?: number;
+  notificationEmails?: string[];
 }
 
 export async function updateAppSettings(input: UpdateSettingsInput): Promise<AppSettingsView> {
@@ -98,6 +103,7 @@ export async function updateAppSettings(input: UpdateSettingsInput): Promise<App
       ...(input.minEstimatedPrice !== undefined ? { minEstimatedPrice: input.minEstimatedPrice } : {}),
       ...(input.maxEstimatedPrice !== undefined ? { maxEstimatedPrice: input.maxEstimatedPrice } : {}),
       ...(input.minBudgetAmount !== undefined ? { minBudgetAmount: input.minBudgetAmount } : {}),
+      ...(input.notificationEmails ? { notificationEmails: input.notificationEmails } : {}),
       updatedAt: new Date(),
     })
     .where(eq(appSettingsTable.id, 1))
