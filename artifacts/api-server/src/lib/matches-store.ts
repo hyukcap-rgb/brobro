@@ -28,6 +28,17 @@ export async function getScanRun(id: number): Promise<DailyScanRun | null> {
   return run ?? null;
 }
 
+// 요구사항(2026-09-12 사용자 요청: "검색 결과가 있으면 해당 키워드가 있던
+// 첨부파일도 함께 보내줘"): 매일 07시 자동 스캔이 끝난 뒤 그 실행에서 새로
+// 찾은 매칭만 골라 이메일 본문/첨부파일 구성에 쓰기 위한 조회.
+export async function listAwardedMatchesForRun(scanRunId: number): Promise<AwardedMatch[]> {
+  return db
+    .select()
+    .from(awardedMatchesTable)
+    .where(eq(awardedMatchesTable.scanRunId, scanRunId))
+    .orderBy(desc(awardedMatchesTable.createdAt));
+}
+
 // 요구사항(2026-09-10 사용자 요청: "우선 지금 test로 되어있는 결과값들은 모두
 // 삭제해줘"): 배포 확인차 수동으로 돌려본 스캔 실행 기록과 그로 인해 저장된
 // 매칭 결과를 한 번에 정리하기 위한 전체 삭제. 실제 운영 데이터가 쌓이기 전,
