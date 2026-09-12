@@ -105,6 +105,9 @@ export async function ensureSchema(): Promise<void> {
     -- 이미 삭제된 상태이고 리드 레코드 자체는 남아있음을 뜻한다.
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS attachment_deleted_at TIMESTAMPTZ;
 
+    -- 요구사항(2026-09-12: 화면 주소를 사업자주소 대신 실제 공사현장으로).
+    ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS site_address TEXT;
+
     -- 요구사항(2026-09-11 사용자 제안: "전일 공사 항목의 첨부파일을 서버에
     -- 저장하고 서버에 저장한 파일을 키워드 검색하면 어떨까"): 공고 상세정보(첨부
     -- 파일 URL, 예산, 업무구분 등)는 공고 등록 후 바뀌지 않는데도, 최근 3일
