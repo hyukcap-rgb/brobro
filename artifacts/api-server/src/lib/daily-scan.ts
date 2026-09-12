@@ -17,6 +17,7 @@ import {
   withRetry,
   describeError,
   extractItemFields,
+  extractSiteAddress,
   extractBusinessContactFromText,
   searchBusinessContactOnPortal,
   searchBusinessContactOnWeb,
@@ -890,6 +891,13 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                   guessSiteOffice(match.originalText) ??
                   (detail.dminsttNm ? `${String(detail.dminsttNm)} (발주기관 문의)` : null);
 
+                // 요구사항(2026-09-12: 주소를 사업자주소 대신 실제 공사현장으로).
+                // 첨부파일 명시값 우선, 없으면 공사현장지역명(cnstrtsiteRgnNm)으로
+                // 대체 — bidderAddress(아래, 낙찰자 사업자 소재지)와는 다른 값이다.
+                const siteAddress =
+                  extractSiteAddress(`${match.surroundingText}\n${match.originalText}`) ??
+                  (String(detail.cnstrtsiteRgnNm ?? "").trim() || null);
+
                 // 요구사항 7, 8: 낙찰자 연락처/주소 — 정부 기록에 없으면 첨부파일,
                 // 그래도 없으면 네이버 API로 보완.
                 const { address: bidderAddress, phone: bidderPhone, contactSource } = await resolveBidderContactCached(
@@ -909,6 +917,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                       noticeName: String(detail.bidNtceNm ?? "").trim() || null,
                       siteName: String(detail.bidNtceNm ?? "").trim() || null,
                       siteOffice,
+                      siteAddress,
                       workTypeName,
                       workCategory: source,
                       demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
