@@ -762,6 +762,13 @@ components:
           type: ["number", "null"]
         minBudgetAmount:
           type: number
+        notificationEmails:
+          type: array
+          description: >-
+            매일 07시(KST) 자동 검색이 끝나면 결과 요약 메일을 받을 주소 목록.
+            그날 새로 발견된 매칭이 있을 때만 발송한다.
+          items:
+            type: string
         updatedAt:
           type: string
       required:
@@ -769,6 +776,7 @@ components:
         - workTypeKeywords
         - workCategories
         - minBudgetAmount
+        - notificationEmails
         - updatedAt
     AppSettingsInput:
       type: object
@@ -797,6 +805,10 @@ components:
         minBudgetAmount:
           type: number
           minimum: 0
+        notificationEmails:
+          type: array
+          items:
+            type: string
     AwardedMatch:
       type: object
       properties:
