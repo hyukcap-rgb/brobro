@@ -79,6 +79,92 @@ function TagEditor({
   );
 }
 
+// 요구사항(2026-09-12 사용자 요청: "설정에서 매일 검색 결과를 이메일로 자동
+// 전송될 수 있는 주소를 넣는곳을 만들어줘... 추가/삭제가 가능하도록 해줘"):
+// TagEditor와 거의 같은 UI지만, 이메일 형식이 아니면 추가 자체를 막고 안내
+// 문구를 보여준다는 점이 다르다.
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function EmailListEditor({
+  values,
+  onChange,
+}: {
+  values: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const add = () => {
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    if (!EMAIL_PATTERN.test(trimmed)) {
+      setError("올바른 이메일 형식이 아닙니다 (예: name@example.com).");
+      return;
+    }
+    if (values.includes(trimmed)) {
+      setError("이미 등록된 주소입니다.");
+      return;
+    }
+    onChange([...values, trimmed]);
+    setDraft("");
+    setError(null);
+  };
+
+  return (
+    <div className="space-y-2">
+      <Label>결과 알림 이메일</Label>
+      <p className="text-xs text-muted-foreground">
+        매일 오전 7시 자동 검색이 끝났을 때, 그날 새로 찾은 결과가 있으면 이 주소로 요약 메일(첨부파일 포함)을
+        보냅니다. 결과가 없으면 메일을 보내지 않습니다. 화면에서 "지금 실행"한 결과는 메일로 보내지 않습니다.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {values.map((value) => (
+          <Badge key={value} variant="secondary" className="gap-1">
+            {value}
+            <button
+              type="button"
+              onClick={() => onChange(values.filter((item) => item !== value))}
+              className="ml-1 hover:text-destructive"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </Badge>
+        ))}
+        {values.length === 0 ? (
+          <span className="text-xs text-muted-foreground">등록된 주소가 없습니다 (메일이 발송되지 않습니다).</span>
+        ) : null}
+      </div>
+      <div className="flex gap-2">
+        <Input
+          type="email"
+          value={draft}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setError(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              add();
+            }
+          }}
+          placeholder="name@example.com 입력 후 Enter"
+        />
+        <Button type="button" variant="outline" onClick={add}>
+          <Plus className="h-4 w-4" /> 추가
+        </Button>
+      </div>
+      {error ? (
+        <div className="flex items-center gap-2 text-sm text-destructive">
+          <AlertCircle className="h-4 w-4" />
+          {error}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // 나라장터 자체 검색 화면(입찰공고 > 최종낙찰자)의 "업무구분" 체크박스와 동일한
 // 구성으로 맞췄다. 물품/일반용역/기술용역/공사는 실제로 별도 API로 연동되어
 // 있어 선택할 수 있고, 기타/민간은 나라장터가 아닌 별도 API(누리장터) 등록이
@@ -155,6 +241,7 @@ export default function Settings() {
   const [minEstimatedPrice, setMinEstimatedPrice] = useState("");
   const [maxEstimatedPrice, setMaxEstimatedPrice] = useState("");
   const [minBudgetAmount, setMinBudgetAmount] = useState("50000000");
+  const [notificationEmails, setNotificationEmails] = useState<string[]>([]);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -165,6 +252,7 @@ export default function Settings() {
     setMinEstimatedPrice(settingsQuery.data.minEstimatedPrice != null ? String(settingsQuery.data.minEstimatedPrice) : "");
     setMaxEstimatedPrice(settingsQuery.data.maxEstimatedPrice != null ? String(settingsQuery.data.maxEstimatedPrice) : "");
     setMinBudgetAmount(String(settingsQuery.data.minBudgetAmount));
+    setNotificationEmails(settingsQuery.data.notificationEmails);
   }, [settingsQuery.data]);
 
   // 요구사항(설정 저장 오류 명확화, 2026-09-09): 서버까지 갔다가 400으로
@@ -187,6 +275,7 @@ export default function Settings() {
           minEstimatedPrice: minEstimatedPrice.trim() === "" ? null : Number(minEstimatedPrice),
           maxEstimatedPrice: maxEstimatedPrice.trim() === "" ? null : Number(maxEstimatedPrice),
           minBudgetAmount: Number(minBudgetAmount) || 0,
+          notificationEmails,
         },
       },
       { onSuccess: () => setSaved(true) },
@@ -275,6 +364,8 @@ export default function Settings() {
               onChange={(event) => setMinBudgetAmount(event.target.value)}
             />
           </div>
+
+          <EmailListEditor values={notificationEmails} onChange={setNotificationEmails} />
 
           {!canSave ? (
             <div className="flex items-center gap-2 text-sm text-destructive">
