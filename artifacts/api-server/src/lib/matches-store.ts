@@ -64,7 +64,8 @@ export async function deleteAllScanData(): Promise<{ deletedMatches: number; del
 
 const MATCH_HEADERS = [
   "공고번호", "현장명(공고명)", "발주기관", "업무구분", "공종", "낙찰자", "사업자등록번호",
-  "낙찰자 주소", "낙찰자 전화", "연락처 출처", "현장사무소", "부직포 수량",
+  // 요구사항(2026-09-12: 사업자주소 대신 실제 공사현장 주소).
+  "현장 주소", "낙찰자 전화", "연락처 출처", "현장사무소", "부직포 수량",
   "추정가격", "예산금액", "낙찰금액", "낙찰일", "매칭 키워드", "첨부파일명", "확인시각",
 ];
 
@@ -85,7 +86,7 @@ function matchRow(match: AwardedMatch): string[] {
     match.workTypeName ?? "",
     match.bidderName ?? "",
     match.bidderBizno ?? "",
-    match.bidderAddress ?? "",
+    match.siteAddress ?? "",
     match.bidderPhone ?? "",
     (match.contactSource && CONTACT_SOURCE_LABELS[match.contactSource]) ?? "",
     match.siteOffice ?? "",
