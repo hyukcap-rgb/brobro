@@ -1059,6 +1059,16 @@ export function extractBusinessContactFromText(
   return found;
 }
 
+// 요구사항(2026-09-12: 주소를 낙찰자 사업자주소 대신 실제 공사현장 주소로).
+// 첨부파일에 "현장위치"/"공사현장"/"설치장소" 라벨이 있으면 그 값을 쓰고,
+// 없으면 daily-scan.ts가 cnstrtsiteRgnNm(공사현장지역명)으로 대체한다.
+const SITE_ADDRESS_PATTERN =
+  /(?:공사\s*현장|현장\s*(?:위치|주소)|공사\s*(?:위치|장소)|시공\s*(?:위치|장소)|설치\s*(?:위치|장소)|작업\s*(?:위치|장소)|사업\s*(?:위치|장소)|이행\s*장소|납품\s*장소|시행\s*(?:위치|장소))\s*[:：|]?\s*([^\n\r|]{4,80})/;
+
+export function extractSiteAddress(text: string): string | undefined {
+  return text.match(SITE_ADDRESS_PATTERN)?.[1]?.trim() || undefined;
+}
+
 // Re-reads the notice's already-downloaded attachment files (kept on disk for
 // the ZIP download) looking for the winning bidder's company name.
 async function findBusinessContactInAttachments(
