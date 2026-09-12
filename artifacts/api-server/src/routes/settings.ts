@@ -19,7 +19,14 @@ const SETTINGS_FIELD_ERROR_MESSAGES: Record<string, string> = {
   minEstimatedPrice: "추정가격 최소값을 확인해 주세요 (0 이상의 숫자).",
   maxEstimatedPrice: "추정가격 최대값을 확인해 주세요 (0 이상의 숫자).",
   minBudgetAmount: "최소 공사 규모 값을 확인해 주세요 (0 이상의 숫자).",
+  notificationEmails: "이메일 주소 형식을 확인해 주세요.",
 };
+
+// 요구사항(2026-09-12 사용자 요청: 매일 검색 결과 자동 이메일 발송): 오타로 잘못된
+// 주소가 저장되지 않도록 간단히 형식만 검사한다. zod 스키마는 orval이 생성하는
+// 공용 파일이라(이 프로젝트의 zod 버전은 zod.email()을 지원하지 않음) 여기서
+// 별도로 검사한다.
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 router.put("/settings", async (req, res) => {
   const input = UpdateSettingsBody.safeParse(req.body);
@@ -27,6 +34,10 @@ router.put("/settings", async (req, res) => {
     const field = input.error.issues[0]?.path[0];
     const message = (field != null && SETTINGS_FIELD_ERROR_MESSAGES[String(field)]) || "설정 값을 확인해 주세요.";
     res.status(400).json({ error: message });
+    return;
+  }
+  if (input.data.notificationEmails?.some((email) => !EMAIL_PATTERN.test(email))) {
+    res.status(400).json({ error: SETTINGS_FIELD_ERROR_MESSAGES.notificationEmails });
     return;
   }
   try {
