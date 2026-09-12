@@ -17,5 +17,7 @@ export interface AppSettings {
   /** @nullable */
   maxEstimatedPrice?: number | null;
   minBudgetAmount: number;
+  /** 매일 07시(KST) 자동 검색이 끝나면 결과 요약 메일을 받을 주소 목록. 그날 새로 발견된 매칭이 있을 때만 발송한다. */
+  notificationEmails: string[];
   updatedAt: string;
 }
