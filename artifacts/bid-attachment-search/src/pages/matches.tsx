@@ -472,7 +472,8 @@ export default function Matches() {
                           규모 {sortIndicator("budgetAmount")}
                         </button>
                       </TableHead>
-                      <TableHead className="px-2">주소</TableHead>
+                      {/* 요구사항(2026-09-12: 사업자주소 대신 실제 공사현장 주소). */}
+                      <TableHead className="px-2">현장 주소</TableHead>
                       <TableHead className="px-2">연락처</TableHead>
                       <TableHead className="px-2">첨부파일</TableHead>
                     </TableRow>
@@ -543,8 +544,8 @@ export default function Matches() {
                       <TableCell className="px-2 text-muted-foreground max-w-[160px]">
                         <div className="flex items-start gap-1.5">
                           <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                          <span className="truncate" title={match.bidderAddress ?? undefined}>
-                            {match.bidderAddress ?? "주소 미확인"}
+                          <span className="truncate" title={match.siteAddress ?? undefined}>
+                            {match.siteAddress ?? "주소 미확인"}
                           </span>
                         </div>
                       </TableCell>
