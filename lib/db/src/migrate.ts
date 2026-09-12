@@ -35,6 +35,11 @@ export async function ensureSchema(): Promise<void> {
     ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS min_estimated_price BIGINT;
     ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS max_estimated_price BIGINT;
 
+    -- 요구사항(2026-09-12 사용자 요청: 매일 검색 결과 자동 이메일 발송): 결과를
+    -- 받을 이메일 주소 목록. 기존 배포된 테이블에는 없는 컬럼이라 다른 컬럼들과
+    -- 같은 방식으로 보강한다.
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS notification_emails JSONB NOT NULL DEFAULT '[]'::jsonb;
+
     CREATE TABLE IF NOT EXISTS daily_scan_runs (
       id SERIAL PRIMARY KEY,
       target_dates JSONB NOT NULL,
