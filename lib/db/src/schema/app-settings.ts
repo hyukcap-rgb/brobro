@@ -15,6 +15,10 @@ export const appSettingsTable = pgTable("app_settings", {
   minEstimatedPrice: bigint("min_estimated_price", { mode: "number" }),
   maxEstimatedPrice: bigint("max_estimated_price", { mode: "number" }),
   minBudgetAmount: bigint("min_budget_amount", { mode: "number" }).notNull(),
+  // 요구사항(2026-09-12 사용자 요청: "설정에서 매일 검색 결과를 이메일로 자동
+  // 전송될 수 있는 주소를 넣는곳을 만들어줘"): 매일 07시 자동 스캔이 끝났을 때
+  // 결과 요약 메일을 받을 주소 목록. 설정 화면에서 추가/삭제한다.
+  notificationEmails: jsonb("notification_emails").$type<string[]>().notNull().default([]),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
