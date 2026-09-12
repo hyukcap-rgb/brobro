@@ -24,7 +24,9 @@ import {
 } from "./bid-processing";
 import { getAppSettings } from "./settings";
 import { kstToday, shiftKstDate, isKoreanHoliday, type KstDate } from "./kr-holidays";
-import { SCAN_ROOT } from "./scan-storage";
+import { SCAN_ROOT, resolveMatchAttachmentPath } from "./scan-storage";
+import { listAwardedMatchesForRun } from "./matches-store";
+import { sendScanResultEmail, type ScanResultEmailAttachment } from "./mailer";
 import { logger } from "./logger";
 
 // 하루 API 장애 등으로 여러 날이 한꺼번에 누락된 경우, 한 번의 실행에서 최대
@@ -986,5 +988,67 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
 // immediately while the scan keeps running in the background.
 export async function runDailyScan(triggerType: "schedule" | "manual" = "schedule"): Promise<DailyScanRun> {
   const run = await createPendingScanRun(triggerType);
-  return executeScanRun(run);
+  const completed = await executeScanRun(run);
+  // 요구사항(2026-09-12 사용자 요청: "오전에 검색이 완료되면 자동으로
+  // 보내지도록 해주고"): 매일 07시 자동 스캔(schedule)에서만 메일을 보낸다.
+  // 화면에서 수동으로 "지금 실행"/"기간 지정 재검색"을 누를 때마다 메일이
+  // 오면 번거롭기 때문이다.
+  if (triggerType === "schedule") {
+    await sendScheduleResultEmailIfNeeded(completed);
+  }
+  return completed;
+}
+
+function formatDateLabel(dateKeys: string[]): string {
+  if (dateKeys.length === 0) {
+    const today = kstToday(new Date());
+    return `${today.month}/${today.day}`;
+  }
+  const latest = [...dateKeys].sort()[dateKeys.length - 1];
+  const [, month, day] = latest.split("-").map(Number);
+  return `${month}/${day}`;
+}
+
+// 요구사항(2026-09-12 사용자 요청: "전일 검색 결과가 있으면 메일 제목에
+// '나라장터 검색결과_9/12일_몇건' 이렇게 해서 보낼 수 있도록 해줘... 검색
+// 결과가 있으면 해당 키워드가 있던 첨부파일도 함께 보내줘"): 이번 실행에서
+// 새로 저장된 매칭(matchesFound > 0)이 있고 설정에 등록된 수신 주소가 있을
+// 때만 보낸다. 메일 발송이 실패해도 스캔 실행 자체의 성공/실패 판정에는
+// 영향을 주지 않도록 별도로 감싼다.
+async function sendScheduleResultEmailIfNeeded(run: DailyScanRun): Promise<void> {
+  try {
+    if (run.status !== "completed" || run.matchesFound <= 0) return;
+    const settings = await getAppSettings();
+    if (settings.notificationEmails.length === 0) return;
+    const matches = await listAwardedMatchesForRun(run.id);
+    if (matches.length === 0) return;
+
+    const attachments: ScanResultEmailAttachment[] = [];
+    for (const match of matches) {
+      if (match.attachmentDeletedAt || !match.attachmentStoredPath) continue;
+      try {
+        const filePath = await resolveMatchAttachmentPath(match.attachmentStoredPath);
+        attachments.push({ filename: match.attachmentFileName || path.basename(filePath), path: filePath });
+      } catch (error) {
+        logger.warn({ err: error, matchId: match.id }, "일일 검색결과 메일: 첨부파일 준비 실패 - 건너뜀");
+      }
+    }
+
+    await sendScanResultEmail({
+      to: settings.notificationEmails,
+      dateLabel: formatDateLabel(run.targetDates),
+      matches: matches.map((match) => ({
+        siteName: match.siteName,
+        noticeName: match.noticeName,
+        demandAgency: match.demandAgency,
+        bidderName: match.bidderName,
+        matchedKeyword: match.matchedKeyword,
+        quantityText: match.quantityText,
+        attachmentFileName: match.attachmentFileName,
+      })),
+      attachments,
+    });
+  } catch (error) {
+    logger.error({ err: error, runId: run.id }, "일일 검색결과 메일 발송 처리 중 오류");
+  }
 }
