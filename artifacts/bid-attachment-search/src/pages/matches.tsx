@@ -433,12 +433,18 @@ export default function Matches() {
               <div className="text-xs text-muted-foreground">
                 총 {totalVisibleCount}건 · {dateGroups.length}일
               </div>
+              {/* 요구사항(2026-09-12 사용자 요청: "검색결과에 가로 스크롤이
+              생겼는데 안생기도록 내용 사이즈를 조정해줘"): 컬럼마다 nowrap +
+              넉넉한(p-4) 셀 여백을 그대로 두면 8개 컬럼 폭 합이 화면보다
+              커져 가로 스크롤이 생긴다. 셀 여백을 좁히고(px-2), 값이 길어질
+              수 있는 낙찰자/연락처는 한 줄 고정 대신 줄바꿈되도록 바꿔서
+              전체 폭이 뷰포트 안에 들어오게 한다. */}
               <div className="overflow-x-auto rounded-md border">
-                <Table>
+                <Table className="text-xs">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>공고번호</TableHead>
-                      <TableHead>
+                      <TableHead className="px-2">공고번호</TableHead>
+                      <TableHead className="px-2">
                         <button
                           type="button"
                           onClick={() => toggleSort("awardDate")}
@@ -447,8 +453,8 @@ export default function Matches() {
                           낙찰일 {sortIndicator("awardDate")}
                         </button>
                       </TableHead>
-                      <TableHead>키워드 · 수량</TableHead>
-                      <TableHead>
+                      <TableHead className="px-2">키워드 · 수량</TableHead>
+                      <TableHead className="px-2">
                         <button
                           type="button"
                           onClick={() => toggleSort("bidderName")}
@@ -457,7 +463,7 @@ export default function Matches() {
                           낙찰자 {sortIndicator("bidderName")}
                         </button>
                       </TableHead>
-                      <TableHead>
+                      <TableHead className="px-2">
                         <button
                           type="button"
                           onClick={() => toggleSort("budgetAmount")}
@@ -466,9 +472,9 @@ export default function Matches() {
                           규모 {sortIndicator("budgetAmount")}
                         </button>
                       </TableHead>
-                      <TableHead>주소</TableHead>
-                      <TableHead>연락처</TableHead>
-                      <TableHead>첨부파일</TableHead>
+                      <TableHead className="px-2">주소</TableHead>
+                      <TableHead className="px-2">연락처</TableHead>
+                      <TableHead className="px-2">첨부파일</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -477,7 +483,7 @@ export default function Matches() {
                       return (
                         <Fragment key={dateKey}>
                           <TableRow className="bg-muted/40 hover:bg-muted/40">
-                            <TableCell colSpan={8} className="py-2">
+                            <TableCell colSpan={8} className="py-2 px-2">
                               <button
                                 type="button"
                                 onClick={() => toggleDateCollapsed(dateKey)}
@@ -496,19 +502,19 @@ export default function Matches() {
                             ? null
                             : items.map((match) => (
                     <TableRow key={match.id}>
-                      <TableCell className="whitespace-nowrap">
+                      <TableCell className="px-2 whitespace-nowrap">
                         <CopyNoticeNumberButton value={match.noticeNumber} />
                       </TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{match.awardDate ?? "-"}</TableCell>
+                      <TableCell className="px-2 whitespace-nowrap">{match.awardDate ?? "-"}</TableCell>
                       {/* 요구사항(2026-09-10 사용자 요청: "검색 결과에
                       키워드/수량을 꼭 함께 넣어줘. 이게 가장 중요해. 이걸
                       한눈에 보고 해당 업체에 연락을 하려는게 이 싸이트의
                       핵심이야"): 어떤 자재가 얼마나 필요한지를 가장 먼저
                       눈에 띄게 보여준다. */}
-                      <TableCell className="whitespace-nowrap">
+                      <TableCell className="px-2 max-w-[160px]">
                         {match.matchedKeyword ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-sm font-semibold text-primary">
-                            <Package className="h-4 w-4 shrink-0" />
+                          <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-xs font-semibold text-primary whitespace-normal break-words">
+                            <Package className="h-3.5 w-3.5 shrink-0" />
                             <span>{match.matchedKeyword}</span>
                             {match.quantityText ? <span>· {match.quantityText}</span> : null}
                           </span>
@@ -516,13 +522,13 @@ export default function Matches() {
                           "-"
                         )}
                       </TableCell>
-                      <TableCell className="font-medium whitespace-nowrap">
+                      <TableCell className="px-2 font-medium max-w-[130px]">
                         {match.bidderName ? (
                           <a
                             href={naverSearchHref(match.bidderName)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="hover:underline hover:text-primary"
+                            className="hover:underline hover:text-primary break-words"
                             title="네이버에서 전화번호 검색"
                           >
                             {match.bidderName}
@@ -531,10 +537,10 @@ export default function Matches() {
                           "낙찰자 미확인"
                         )}
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                      <TableCell className="px-2 text-muted-foreground whitespace-nowrap">
                         {formatAmount(match.budgetAmount ?? match.awardAmount)}
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground max-w-[220px]">
+                      <TableCell className="px-2 text-muted-foreground max-w-[160px]">
                         <div className="flex items-start gap-1.5">
                           <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                           <span className="truncate" title={match.bidderAddress ?? undefined}>
@@ -542,15 +548,15 @@ export default function Matches() {
                           </span>
                         </div>
                       </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        <div className="flex items-center gap-1.5 text-sm">
+                      <TableCell className="px-2 max-w-[150px]">
+                        <div className="flex flex-wrap items-center gap-1">
                           <Phone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                           {isUsablePhone(match.bidderPhone) ? (
-                            <a href={telHref(match.bidderPhone!)} className="text-primary hover:underline">
+                            <a href={telHref(match.bidderPhone!)} className="text-primary hover:underline break-words">
                               {match.bidderPhone}
                             </a>
                           ) : (
-                            <span className="text-muted-foreground">
+                            <span className="text-muted-foreground break-words">
                               {match.bidderPhone ? "번호 비공개(마스킹)" : "연락처 미확인"}
                             </span>
                           )}
@@ -578,7 +584,7 @@ export default function Matches() {
                       daily-scan.ts가 매칭 시점에 이미 서버(SCAN_ROOT)에
                       저장해두고 있었다 — 화면에서 열어볼 수 있는 링크가
                       없었을 뿐이라 여기에 추가한다. */}
-                      <TableCell className="max-w-[200px]">
+                      <TableCell className="px-2 max-w-[160px]">
                         {match.attachmentFileName ? (
                           <div className="flex items-center gap-1.5 text-xs">
                             <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
