@@ -203,18 +203,33 @@ export default function Matches() {
     { limit: 500 },
     { query: { queryKey: getListMatchesQueryKey({ limit: 500 }), refetchInterval: 30_000 } },
   );
-  // 요구사항(2026-09-10 사용자 요청: "검색 list 가 오래 쌓이면 아래로 너무
-  // 내려감... 최근 7개만 보여주고 나머지는 다 자동삭제해줘"): 서버가 최근 7건만
-  // 남기고 나머지는 자동 삭제하므로(daily-scan.ts의 pruneOldScanRuns 참고),
-  // 화면에서도 그에 맞춰 최근 7건만 조회한다.
+  // 요구사항(2026-09-13 사용자 요청: "히스토리는 계속 누적으로 남겨두고 다만
+  // 10개까지 보여주고 페이지를 넘기는 방식으로 수정하자"): 예전에는 서버가
+  // 최근 7건만 남기고 자동삭제했었지만(daily-scan.ts 참고, 지금은 제거), 이제
+  // 기록은 전부 보존하고 화면에서 10건씩 페이지를 넘겨가며 본다.
+  const SCAN_HISTORY_PAGE_SIZE = 10;
+  const [scanPage, setScanPage] = useState(0);
   const scansQuery = useListScans(
-    { limit: 7 },
-    { query: { queryKey: getListScansQueryKey({ limit: 7 }), refetchInterval: 15_000 } },
+    { limit: SCAN_HISTORY_PAGE_SIZE, offset: scanPage * SCAN_HISTORY_PAGE_SIZE },
+    {
+      query: {
+        queryKey: getListScansQueryKey({ limit: SCAN_HISTORY_PAGE_SIZE, offset: scanPage * SCAN_HISTORY_PAGE_SIZE }),
+        refetchInterval: 15_000,
+      },
+    },
   );
   const triggerScan = useTriggerScan();
 
   const matches = matchesQuery.data?.matches ?? [];
   const scans = scansQuery.data?.scans ?? [];
+  const scansTotal = scansQuery.data?.total ?? 0;
+  const totalScanPages = Math.max(1, Math.ceil(scansTotal / SCAN_HISTORY_PAGE_SIZE));
+  // 실행 기록이 삭제될 일은 이제 없지만(위 요구사항), 혹시 모를 상황(관리자의
+  // 수동 전체 삭제 등)에 대비해 총 페이지 수보다 큰 페이지에 머물러 있으면
+  // 마지막 페이지로 되돌린다.
+  useEffect(() => {
+    setScanPage((page) => Math.min(page, totalScanPages - 1));
+  }, [totalScanPages]);
 
   // 요구사항(2026-09-10 사용자 요청 4: "자동검색에서 매칭건수를 클릭하면 위에
   // 검색결과에 해당 검색결과를 보여주는 방식으로 수정하자"): 실행 기록의 매칭
@@ -319,10 +334,14 @@ export default function Matches() {
       { data: range ? range : {} },
       {
         onSuccess: () => {
-          void queryClient.invalidateQueries({ queryKey: getListScansQueryKey({ limit: 7 }) });
+          // 요구사항(2026-09-13): 페이지네이션 도입으로 limit/offset 조합별로
+          // 쿼리 키가 달라지므로, 파라미터 없이 호출해 "/api/scans"로 시작하는
+          // 모든 페이지의 캐시를 한번에 무효화한다(현재 보고 있는 페이지가
+          // 몇 페이지든 새로고침되도록).
+          void queryClient.invalidateQueries({ queryKey: getListScansQueryKey() });
           setTimeout(() => {
             void queryClient.invalidateQueries({ queryKey: getListMatchesQueryKey({ limit: 500 }) });
-            void queryClient.invalidateQueries({ queryKey: getListScansQueryKey({ limit: 7 }) });
+            void queryClient.invalidateQueries({ queryKey: getListScansQueryKey() });
           }, 20_000);
         },
       },
@@ -672,7 +691,7 @@ export default function Matches() {
             <CardTitle>자동검색</CardTitle>
             <CardDescription>
               매일 오전 7시(KST) 자동으로 전일 낙찰된 공고 중 키워드가 있는 건을 검색합니다. 아래 기록은
-              최근 7건만 보관되고 이전 기록은 자동 삭제됩니다.
+              삭제되지 않고 전부 누적 보관되며, 10건씩 페이지를 넘겨 볼 수 있습니다.
             </CardDescription>
           </div>
           <Button size="sm" onClick={handleRunNow} disabled={triggerScan.isPending} className="shrink-0">
@@ -783,6 +802,37 @@ export default function Matches() {
               </Table>
             </div>
           )}
+          {/* 요구사항(2026-09-13 사용자 요청: "히스토리는 계속 누적으로
+          남겨두고 다만 10개까지 보여주고 페이지를 넘기는 방식으로 수정하자") */}
+          {totalScanPages > 1 ? (
+            <div className="flex items-center justify-between text-sm text-muted-foreground pt-1">
+              <span>
+                {scanPage * SCAN_HISTORY_PAGE_SIZE + 1}–
+                {Math.min((scanPage + 1) * SCAN_HISTORY_PAGE_SIZE, scansTotal)} / {scansTotal}건
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setScanPage((p) => Math.max(0, p - 1))}
+                  disabled={scanPage === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" /> 이전
+                </Button>
+                <span>
+                  {scanPage + 1} / {totalScanPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setScanPage((p) => Math.min(totalScanPages - 1, p + 1))}
+                  disabled={scanPage >= totalScanPages - 1}
+                >
+                  다음 <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </div>
