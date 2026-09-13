@@ -9,4 +9,6 @@ import type { ScanRun } from './scanRun';
 
 export interface ScanRunListResponse {
   scans: ScanRun[];
+  /** 전체 실행 기록 건수(페이지네이션용, 2026-09-13). */
+  total: number;
 }
