@@ -447,6 +447,8 @@ export interface ScanRun {
 
 export interface ScanRunListResponse {
   scans: ScanRun[];
+  /** 전체 실행 기록 건수(페이지네이션용, 2026-09-13). */
+  total: number;
 }
 
 export type ListMatchesParams = {
@@ -455,5 +457,9 @@ limit?: number;
 
 export type ListScansParams = {
 limit?: number;
+/**
+ * 페이지네이션 오프셋(2026-09-13 사용자 요청: 히스토리는 계속 누적으로 보존하고 10개씩 페이지를 넘겨서 본다).
+ */
+offset?: number;
 };
 
