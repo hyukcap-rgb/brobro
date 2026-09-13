@@ -835,10 +835,12 @@ export async function withRetry<T>(
   maxAttempts = 3,
 ): Promise<AttemptResult<T>> {
   const previousErrors: string[] = [];
+  let lastError: unknown;
   for (let attempts = 1; attempts <= maxAttempts; attempts += 1) {
     try {
       return { value: await operation(), attempts, previousErrors };
     } catch (error) {
+      lastError = error;
       previousErrors.push(describeError(error));
       if (error instanceof CircuitOpenError) throw error;
       if (attempts < maxAttempts) {
@@ -846,6 +848,15 @@ export async function withRetry<T>(
         await new Promise((resolve) => setTimeout(resolve, backoffMs));
       }
     }
+  }
+  // 버그 수정(2026-09-13: data.go.kr 한도초과 재발견으로 발견 - 재시도를 모두
+  // 소진하면 항상 새 Error로 감싸서 던졌기 때문에, 호출자가 하던 QuotaExceededError
+  // instanceof 검사가 재시도 후에는 절대 참이 될 수 없었다("일일 호출 한도 초과"
+  // 원인이 화면에 표시되지 못하고 그냥 조용한 실패로만 보였음). 마지막 실제 오류
+  // 객체(타입 보존)를 메시지만 바꿔서 다시 던진다.
+  if (lastError instanceof Error) {
+    lastError.message = `총 ${maxAttempts}회 시도 실패: ${previousErrors.join(" | ")}`;
+    throw lastError;
   }
   throw new Error(`총 ${maxAttempts}회 시도 실패: ${previousErrors.join(" | ")}`);
 }
