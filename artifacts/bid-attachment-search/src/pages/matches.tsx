@@ -472,7 +472,10 @@ export default function Matches() {
                           규모 {sortIndicator("budgetAmount")}
                         </button>
                       </TableHead>
-                      {/* 요구사항(2026-09-12: 사업자주소 대신 실제 공사현장 주소). */}
+                      {/* 요구사항(2026-09-13 사용자 요청: "낙찰받은 사람의 사무실과
+                      실제 공사 현장을 모두 검색해서 결과에 보여줘"): 사업자 주소와
+                      실제 공사현장 주소를 둘 다 보여준다. */}
+                      <TableHead className="px-2">사업자 주소</TableHead>
                       <TableHead className="px-2">현장 주소</TableHead>
                       <TableHead className="px-2">연락처</TableHead>
                       <TableHead className="px-2">첨부파일</TableHead>
@@ -484,7 +487,7 @@ export default function Matches() {
                       return (
                         <Fragment key={dateKey}>
                           <TableRow className="bg-muted/40 hover:bg-muted/40">
-                            <TableCell colSpan={8} className="py-2 px-2">
+                            <TableCell colSpan={9} className="py-2 px-2">
                               <button
                                 type="button"
                                 onClick={() => toggleDateCollapsed(dateKey)}
@@ -540,6 +543,18 @@ export default function Matches() {
                       </TableCell>
                       <TableCell className="px-2 text-muted-foreground whitespace-nowrap">
                         {formatAmount(match.budgetAmount ?? match.awardAmount)}
+                      </TableCell>
+                      {/* 요구사항(2026-09-13 사용자 요청: "낙찰받은 사람의 사무실과
+                      실제 공사 현장을 모두 검색해서 결과에 보여줘"): 사업자 주소
+                      (bidderAddress)와 실제 공사현장 주소(siteAddress)를 각각 별도
+                      칼럼으로 보여준다. */}
+                      <TableCell className="px-2 text-muted-foreground max-w-[160px]">
+                        <div className="flex items-start gap-1.5">
+                          <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                          <span className="truncate" title={match.bidderAddress ?? undefined}>
+                            {match.bidderAddress ?? "주소 미확인"}
+                          </span>
+                        </div>
                       </TableCell>
                       <TableCell className="px-2 text-muted-foreground max-w-[160px]">
                         <div className="flex items-start gap-1.5">
