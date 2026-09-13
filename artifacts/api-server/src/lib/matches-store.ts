@@ -3,7 +3,7 @@ import path from "node:path";
 import { createReadStream } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Response } from "express";
-import { desc, eq } from "drizzle-orm";
+import { count, desc, eq } from "drizzle-orm";
 import { db, awardedMatchesTable, dailyScanRunsTable, type AwardedMatch, type DailyScanRun } from "@workspace/db";
 import { command } from "./bid-processing";
 
@@ -15,12 +15,25 @@ export async function listAwardedMatches(limit = 500): Promise<AwardedMatch[]> {
     .limit(Math.max(1, Math.min(5000, limit)));
 }
 
-export async function listScanRuns(limit = 60): Promise<DailyScanRun[]> {
-  return db
-    .select()
-    .from(dailyScanRunsTable)
-    .orderBy(desc(dailyScanRunsTable.startedAt))
-    .limit(Math.max(1, Math.min(200, limit)));
+// 요구사항(2026-09-13 사용자 요청: "히스토리는 계속 누적으로 남겨두고 다만
+// 10개까지 보여주고 페이지를 넘기는 방식으로 수정하자"): 예전에는 서버가
+// 최근 7건만 남기고 나머지를 자동삭제했었다(daily-scan.ts 참고, 지금은 제거).
+// 이제는 기록을 전부 보존하고, 화면에서 offset/limit으로 페이지를 넘기며 볼
+// 수 있도록 전체 건수(total)도 함께 반환한다.
+export async function listScanRuns(
+  limit = 60,
+  offset = 0,
+): Promise<{ scans: DailyScanRun[]; total: number }> {
+  const [scans, [{ value: total }]] = await Promise.all([
+    db
+      .select()
+      .from(dailyScanRunsTable)
+      .orderBy(desc(dailyScanRunsTable.startedAt))
+      .limit(Math.max(1, Math.min(200, limit)))
+      .offset(Math.max(0, offset)),
+    db.select({ value: count() }).from(dailyScanRunsTable),
+  ]);
+  return { scans, total };
 }
 
 export async function getScanRun(id: number): Promise<DailyScanRun | null> {
