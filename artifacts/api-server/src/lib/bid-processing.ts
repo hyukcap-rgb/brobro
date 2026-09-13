@@ -1771,19 +1771,75 @@ async function extractLegacy(filePath: string, extension: string): Promise<Extra
     }));
 }
 
+type ContainerKind = "ole" | "zip" | "pdf" | "other";
+
+// 확장자가 아니라 파일 앞 8바이트로 실제 컨테이너 종류를 판별한다.
+// 실측(2026-09-13, 국가철도공단 공고 2026-03-000199 첨부): 확장자가 .hwpx인데
+// 내용은 HWP 5.0 OLE 바이너리인 파일이 존재한다. 확장자만 믿으면 이런 파일을
+// ZIP으로 열려다 BadZipFile로 실패해 본문이 통째로 검색에서 빠진다. 기관 사이트가
+// Content-Type을 application/x-msdownload로 내려주는 경우도 흔해 MIME도 믿을 수
+// 없다 — 신뢰할 수 있는 건 파일 내용뿐이다.
+async function sniffContainer(filePath: string): Promise<ContainerKind> {
+  const handle = await open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(8);
+    const { bytesRead } = await handle.read(buffer, 0, 8, 0);
+    if (bytesRead >= 4) {
+      if (buffer.readUInt32BE(0) === 0xd0cf11e0) return "ole";
+      if (buffer[0] === 0x50 && buffer[1] === 0x4b) return "zip";
+      if (buffer.subarray(0, 4).toString("latin1") === "%PDF") return "pdf";
+    }
+    return "other";
+  } finally {
+    await handle.close();
+  }
+}
+
+// HWP 5.0은 본문(BodyText)이 zlib(raw deflate)으로 압축된 OLE 스트림이라,
+// extractLegacy의 `strings` 방식으로는 스트림 이름과 목차 번호 정도만 나온다
+// (실측: 4,468자짜리 구매시방서에서 strings 출력은 88줄 전부 무의미한 문자열).
+// 부직포 같은 자재명은 대부분 시방서·내역서 본문과 표 안에 있으므로, HWP 첨부만
+// 있는 공고는 이 구조에서 매칭이 원천적으로 불가능했다. olefile로 BodyText를
+// 풀어 문단 단위로 추출한다.
+async function extractHwp5(filePath: string): Promise<ExtractedSegment[]> {
+  const scriptPath = path.resolve(import.meta.dirname, "..", "scripts", "extract-hwp.py");
+  try {
+    return JSON.parse(await command("python3", [scriptPath, filePath])) as ExtractedSegment[];
+  } catch (error) {
+    throw new Error(`HWP 본문 파싱 실패: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export async function extractSegments(filePath: string): Promise<ExtractedSegment[]> {
   const extension = path.extname(filePath).toLowerCase();
-  if ([".xlsx", ".xlsm"].includes(extension)) return extractXlsx(filePath);
-  if (extension === ".docx") {
-    return extractOfficeXml(filePath, /^word\/document\.xml$/i, "DOCX");
+  // 컨테이너 종류를 먼저 보고, 확장자는 같은 컨테이너 안에서 포맷을 고르는
+  // 용도로만 쓴다 (sniffContainer 주석 참고).
+  const container = await sniffContainer(filePath);
+
+  if (container === "pdf") return extractPdf(filePath);
+
+  if (container === "ole") {
+    if (extension === ".xls") return extractLegacy(filePath, ".xls");
+    if (extension === ".doc") return extractLegacy(filePath, ".doc");
+    // .hwp / .hwpx / 확장자가 엉뚱한 경우까지 전부 HWP 5.0으로 본다.
+    try {
+      return await extractHwp5(filePath);
+    } catch {
+      // 암호화된 HWP 등 파서가 못 여는 경우에도 최소한 문자열은 건진다.
+      return extractLegacy(filePath, ".hwp");
+    }
   }
-  if ([".hwpx", ".hwtx"].includes(extension)) {
+
+  if (container === "zip") {
+    // 묶음 ZIP은 extractZipRecursively가 먼저 풀어 개별 파일로 들어온다.
+    if (extension === ".zip") return [];
+    if ([".xlsx", ".xlsm"].includes(extension)) return extractXlsx(filePath);
+    if (extension === ".docx") {
+      return extractOfficeXml(filePath, /^word\/document\.xml$/i, "DOCX");
+    }
     return extractOfficeXml(filePath, /^(?:Contents|contents)\/section\d+\.xml$/, "HWPX");
   }
-  if (extension === ".pdf") return extractPdf(filePath);
-  if ([".xls", ".hwp", ".doc"].includes(extension)) {
-    return extractLegacy(filePath, extension);
-  }
+
   if ([".csv", ".txt", ".xml"].includes(extension)) {
     const text = decodeText(await readFile(filePath));
     return text.split(/\r?\n/).map((line, index) => ({
