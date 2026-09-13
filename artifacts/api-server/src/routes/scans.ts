@@ -6,7 +6,7 @@ import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
-function serializeRun(run: Awaited<ReturnType<typeof listScanRuns>>[number]) {
+function serializeRun(run: Awaited<ReturnType<typeof listScanRuns>>["scans"][number]) {
   return {
     ...run,
     startedAt: run.startedAt.toISOString(),
@@ -14,11 +14,16 @@ function serializeRun(run: Awaited<ReturnType<typeof listScanRuns>>[number]) {
   };
 }
 
+// 요구사항(2026-09-13 사용자 요청: "히스토리는 계속 누적으로 남겨두고 다만
+// 10개까지 보여주고 페이지를 넘기는 방식으로 수정하자"): offset을 받아 서버
+// 페이지네이션을 지원하고, 화면이 전체 페이지 수를 계산할 수 있도록 total도
+// 함께 내려준다.
 router.get("/scans", async (req, res) => {
   const params = ListScansQueryParams.safeParse(req.query);
   const limit = params.success ? params.data.limit : undefined;
-  const scans = await listScanRuns(limit);
-  res.json({ scans: scans.map(serializeRun) });
+  const offset = params.success ? params.data.offset : undefined;
+  const { scans, total } = await listScanRuns(limit, offset);
+  res.json({ scans: scans.map(serializeRun), total });
 });
 
 // 요구사항(2026-09-10 사용자 요청: "우선 지금 test로 되어있는 결과값들은 모두
