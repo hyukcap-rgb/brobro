@@ -1080,6 +1080,57 @@ export function extractSiteAddress(text: string): string | undefined {
   return text.match(SITE_ADDRESS_PATTERN)?.[1]?.trim() || undefined;
 }
 
+// 요구사항(2026-09-13 사용자 지적: "이미 계속 주소 미확인으로 나오고 있어.
+// 보통 공고제목이나 글 내용에 공사현장 주소가 나와있거든. 그걸 검색해서
+// 현장주소를 찾아줘"): 위 SITE_ADDRESS_PATTERN은 "현장위치:" 같은 명시적
+// 라벨이 붙어있을 때만 잡아내는데, 실제로는 라벨 없이 공고제목이나 첨부파일
+// 본문에 그냥 주소 문장이 섞여 나오는 경우가 훨씬 많다(예: 공고제목의
+// "○○공사(경기도 성남시 분당구)", 첨부파일의 "경기도 성남시 분당구
+// 판교역로 235번길 15"). 라벨과 무관하게 "시/도 + 시/군/구 + 동/로/길(+번지)"
+// 형태의 한국 주소 패턴 자체를 찾아내는 보조 함수 — daily-scan.ts에서
+// extractSiteAddress(라벨 매칭, 최우선) 다음으로 공고제목 → 첨부파일 본문
+// 순서로 시도한다.
+const SIDO_NAMES = [
+  "서울특별시", "서울시", "서울",
+  "부산광역시", "부산",
+  "대구광역시", "대구",
+  "인천광역시", "인천",
+  "광주광역시", "광주",
+  "대전광역시", "대전",
+  "울산광역시", "울산",
+  "세종특별자치시", "세종",
+  "경기도", "경기",
+  "강원특별자치도", "강원도", "강원",
+  "충청북도", "충북",
+  "충청남도", "충남",
+  "전북특별자치도", "전라북도", "전북",
+  "전라남도", "전남",
+  "경상북도", "경북",
+  "경상남도", "경남",
+  "제주특별자치도", "제주도", "제주",
+];
+// 같은 접두를 가진 이름끼리는 긴 이름이 먼저 매칭되도록 정렬(예: "서울특별시"가
+// "서울"보다 먼저 시도되어야 짧게 잘리지 않는다).
+const SIDO_ALT = [...SIDO_NAMES].sort((a, b) => b.length - a.length).join("|");
+// 시/군/구/읍/면/동/리/가/로/길로 끝나는 한 덩어리(예: "강남구", "테헤란로",
+// "판교역로", "235번길"). 뒤에 곧바로 한글/숫자가 더 이어지면(예: "강남구민"의
+// "구") 실제로는 다른 단어의 일부일 수 있으므로 제외한다.
+const ADDRESS_TOKEN = "[가-힣0-9]{1,10}(?:시|군|구|읍|면|동|리|가|로|길)(?![가-힣0-9])";
+// (?=(SIDO_ALT))\1 트릭: 시/도 부분은 일반 (?:SIDO_ALT)로 쓰면 뒤쪽
+// ADDRESS_TOKEN이 실패할 때 정규식이 더 짧은 대안으로 되돌아갈 수 있다 — 예를
+// 들어 "서울특별시 강남구민을 위한 행사"에서 "강남구"가 "구민"의 일부라 토큰
+// 매칭에 실패하면, "서울특별시" 대신 "서울"로 되돌아간 뒤 "특별시"를(마침
+// "시"로 끝나서) 엉뚱하게 ADDRESS_TOKEN으로 오인해 "서울특별시"라는 가짜
+// 매칭을 만들어낸다(실제 검증 중 발견). lookahead+역참조로 시/도명을 한
+// 덩어리로 고정해 이런 되돌아감 자체를 막는다.
+const GENERAL_ADDRESS_PATTERN = new RegExp(
+  `(?=(${SIDO_ALT}))\\1(?:\\s?${ADDRESS_TOKEN}){1,4}(?:\\s?[0-9]{1,5}(?:-[0-9]{1,4})?)?`,
+);
+
+export function extractGeneralAddress(text: string): string | undefined {
+  return text.match(GENERAL_ADDRESS_PATTERN)?.[0]?.trim() || undefined;
+}
+
 // Re-reads the notice's already-downloaded attachment files (kept on disk for
 // the ZIP download) looking for the winning bidder's company name.
 async function findBusinessContactInAttachments(
