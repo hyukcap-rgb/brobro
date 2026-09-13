@@ -1,7 +1,7 @@
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { copyFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
-import { desc, eq, inArray, notInArray } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db, dailyScanRunsTable, awardedMatchesTable, noticeDetailCacheTable, type DailyScanRun } from "@workspace/db";
 import {
   requestBuffer,
@@ -18,6 +18,7 @@ import {
   describeError,
   extractItemFields,
   extractSiteAddress,
+  extractGeneralAddress,
   extractBusinessContactFromText,
   searchBusinessContactOnPortal,
   searchBusinessContactOnWeb,
@@ -552,35 +553,15 @@ function buildDateRange(startKey: string, endKey: string): KstDate[] {
   return dates;
 }
 
-// 요구사항(2026-09-10 사용자 요청: "검색 list 가 오래 쌓이면 아래로 너무
-// 내려감. 검색을 언제 했는지는 중요하지 않으니 결과 history는 없어도 됨.
-// 최근 7개만 보여주고 나머지는 다 자동삭제해줘"): 자동검색 실행 기록은 "언제
-// 검색했는지"만 남기는 로그라 오래될수록 볼 필요가 없다. 매 실행마다 최근
-// MAX_SCAN_RUN_HISTORY건만 남기고 더 오래된 기록은 지운다. 단, 그 기록에
-// 연결된 매칭 결과(누적 영업 리드)는 별개의 누적 데이터이므로 지우지 않고
-// scanRunId 연결만 끊는다.
-const MAX_SCAN_RUN_HISTORY = 7;
-
-async function pruneOldScanRuns(): Promise<void> {
-  const recent = await db
-    .select({ id: dailyScanRunsTable.id })
-    .from(dailyScanRunsTable)
-    .orderBy(desc(dailyScanRunsTable.startedAt))
-    .limit(MAX_SCAN_RUN_HISTORY);
-  const keepIds = recent.map((row) => row.id);
-  if (keepIds.length === 0) return;
-  const stale = await db
-    .select({ id: dailyScanRunsTable.id })
-    .from(dailyScanRunsTable)
-    .where(notInArray(dailyScanRunsTable.id, keepIds));
-  const staleIds = stale.map((row) => row.id);
-  if (staleIds.length === 0) return;
-  await db
-    .update(awardedMatchesTable)
-    .set({ scanRunId: null })
-    .where(inArray(awardedMatchesTable.scanRunId, staleIds));
-  await db.delete(dailyScanRunsTable).where(inArray(dailyScanRunsTable.id, staleIds));
-}
+// 요구사항(2026-09-13 사용자 요청: "히스토리는 계속 누적으로 남겨두고 다만
+// 10개까지 보여주고 페이지를 넘기는 방식으로 수정하자"): 2026-09-10에 넣었던
+// "최근 7개만 남기고 나머지는 자동삭제" 로직(pruneOldScanRuns)을 제거했다 —
+// 화면은 이제 서버 페이지네이션(routes/scans.ts의 offset)으로 10개씩 넘겨
+// 보여주고, 기록 자체는 지우지 않고 전부 보존한다. 참고로 이 자동삭제가
+// getMostRecentCoveredDateKey()가 참조하는 "완료된 실행 기록"까지 지워버려서,
+// 최근 실행이 재배포/한도초과로 계속 실패할 때 정상 완료됐던 과거 기록마저
+// 밀려나 사라지고 gap-fill 기준일이 필요 이상으로 옛날로 후퇴하는 부작용도
+// 있었다 — 히스토리를 보존하는 쪽이 이 문제도 함께 줄여준다.
 
 // 스캔 실행 기록만 즉시 만들어 반환한다 (수동 트리거 API가 바로 202로 응답할 수
 // 있도록). 실제 스캔은 executeScanRun에서 진행되며 몇 분씩 걸릴 수 있다.
@@ -604,9 +585,6 @@ export async function createPendingScanRun(
     throw error;
   }
   if (!run) throw new Error("스캔 작업을 생성하지 못했습니다.");
-  await pruneOldScanRuns().catch((error) => {
-    logger.warn({ err: error }, "Failed to prune old scan run history");
-  });
   return run;
 }
 
@@ -891,11 +869,23 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                   guessSiteOffice(match.originalText) ??
                   (detail.dminsttNm ? `${String(detail.dminsttNm)} (발주기관 문의)` : null);
 
-                // 요구사항(2026-09-12: 주소를 사업자주소 대신 실제 공사현장으로).
-                // 첨부파일 명시값 우선, 없으면 공사현장지역명(cnstrtsiteRgnNm)으로
-                // 대체 — bidderAddress(아래, 낙찰자 사업자 소재지)와는 다른 값이다.
+                // 요구사항(2026-09-12: 주소를 사업자주소 대신 실제 공사현장으로 /
+                // 2026-09-13 사용자 지적: "이미 계속 주소 미확인으로 나오고
+                // 있어. 보통 공고제목이나 글 내용에 공사현장 주소가
+                // 나와있거든"): "현장위치:" 같은 라벨이 있으면 최우선으로 쓰고
+                // (extractSiteAddress), 없으면 라벨 없이도 공고제목이나
+                // 첨부파일 본문에 섞여 나오는 주소 패턴 자체를 찾는다
+                // (extractGeneralAddress) — 공고제목을 첨부파일 본문보다 먼저
+                // 보는 이유는 발주기관이 직접 적은 제목이 첨부파일 안의 다른
+                // 주소(예: 관련 없는 참고현장)보다 신뢰도가 높기 때문. 그래도
+                // 못 찾으면 마지막으로 공사현장지역명(cnstrtsiteRgnNm, 구
+                // 단위까지만 나오는 API 필드)으로 대체한다 — bidderAddress
+                // (아래, 낙찰자 사업자 소재지)와는 다른 값이다.
+                const attachmentText = `${match.surroundingText}\n${match.originalText}`;
                 const siteAddress =
-                  extractSiteAddress(`${match.surroundingText}\n${match.originalText}`) ??
+                  extractSiteAddress(attachmentText) ??
+                  extractGeneralAddress(String(detail.bidNtceNm ?? "")) ??
+                  extractGeneralAddress(attachmentText) ??
                   (String(detail.cnstrtsiteRgnNm ?? "").trim() || null);
 
                 // 요구사항 7, 8: 낙찰자 연락처/주소 — 정부 기록에 없으면 첨부파일,
