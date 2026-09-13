@@ -17,8 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# xlrd is the only Python dependency extract-xls.py needs (see pyproject.toml).
-RUN pip install --no-cache-dir --break-system-packages xlrd
+# xlrd     - scripts/extract-xls.py (레거시 .xls)
+# olefile  - scripts/extract-hwp.py (HWP 5.0 OLE 본문 추출)
+RUN pip install --no-cache-dir --break-system-packages xlrd olefile
 
 COPY . .
 
