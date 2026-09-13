@@ -159,7 +159,8 @@ export const DownloadMatchAttachmentResponse = zod.unknown()
  * @summary List daily scan run history
  */
 export const ListScansQueryParams = zod.object({
-  "limit": zod.coerce.number().optional()
+  "limit": zod.coerce.number().optional(),
+  "offset": zod.coerce.number().optional().describe('페이지네이션 오프셋(2026-09-13 사용자 요청: 히스토리는 계속 누적으로 보존하고 10개씩 페이지를 넘겨서 본다).')
 })
 
 export const ListScansResponse = zod.object({
@@ -174,7 +175,8 @@ export const ListScansResponse = zod.object({
   "errorMessage": zod.string().nullish(),
   "startedAt": zod.string(),
   "finishedAt": zod.string().nullish()
-}))
+})),
+  "total": zod.number().describe('전체 실행 기록 건수(페이지네이션용, 2026-09-13).')
 })
 
 
