@@ -89,6 +89,32 @@ function buildHtml(params: ScanResultEmailParams): string {
     </div>`;
 }
 
+// 요구사항(2026-09-14 사용자 요청: "테스트 메일 보내줘"): 실제 매칭 결과와
+// 무관하게, 발신 계정(Gmail)의 앱 비밀번호가 유효한지 바로 확인할 수 있도록
+// 간단한 테스트 메일을 보낸다. SEND_TEST_EMAIL_TO 환경변수가 설정된 동안만
+// 서버 기동 시 1회 호출된다 — 확인 후에는 그 변수를 지워서 재기동마다 다시
+// 보내지지 않도록 한다.
+export async function sendTestEmail(to: string): Promise<void> {
+  const transporter = getTransporter();
+  if (!transporter) {
+    logger.warn(
+      "테스트 메일 발송 건너뜀: MAIL_USER/MAIL_APP_PASSWORD 환경변수가 설정되어 있지 않습니다.",
+    );
+    return;
+  }
+  try {
+    await transporter.sendMail({
+      from: MAIL_USER,
+      to,
+      subject: "나라장터 검색 시스템 - 테스트 메일",
+      html: "<p>이 메일은 메일 발송 설정(Gmail 앱 비밀번호)이 정상 동작하는지 확인하기 위한 테스트 메일입니다.</p>",
+    });
+    logger.info({ to }, "테스트 메일 발송 완료");
+  } catch (error) {
+    logger.error({ err: error }, "테스트 메일 발송 실패");
+  }
+}
+
 export async function sendScanResultEmail(params: ScanResultEmailParams): Promise<void> {
   if (params.to.length === 0 || params.matches.length === 0) return;
   const transporter = getTransporter();
