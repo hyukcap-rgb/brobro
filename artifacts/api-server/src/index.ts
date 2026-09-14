@@ -56,15 +56,19 @@ async function maybeRunLhApiTest(): Promise<void> {
     `serviceKey=${formatServiceKey(key)}`,
     "pageNo=1",
     "numOfRows=5",
-    `openDtmStart=${compactDate(start)}0000`,
-    `openDtmEnd=${compactDate(today)}2359`,
+    `openDtmStart=${compactDate(start)}`,
+    `openDtmEnd=${compactDate(today)}`,
   ].join("&");
   try {
     const res = await requestBuffer(
       `https://apis.data.go.kr/B552555/OpenTenderopenList/getOpenTenderopenList?${tenderOpenQuery}`,
     );
     logger.info(
-      { status: res.status, bodyPreview: res.body.toString("utf8").slice(0, 3000) },
+      {
+        status: res.status,
+        queryPreview: tenderOpenQuery.replace(/serviceKey=[^&]+/, "serviceKey=***"),
+        bodyPreview: res.body.toString("utf8").slice(0, 3000),
+      },
       "LH API 테스트: getOpenTenderopenList 응답",
     );
   } catch (error) {
