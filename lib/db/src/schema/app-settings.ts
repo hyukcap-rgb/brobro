@@ -19,6 +19,12 @@ export const appSettingsTable = pgTable("app_settings", {
   // 전송될 수 있는 주소를 넣는곳을 만들어줘"): 매일 07시 자동 스캔이 끝났을 때
   // 결과 요약 메일을 받을 주소 목록. 설정 화면에서 추가/삭제한다.
   notificationEmails: jsonb("notification_emails").$type<string[]>().notNull().default([]),
+  // 요구사항(2026-09-14 사용자 요청: "토지공사나 군대 입찰싸이트도 선택하면 검색할 수
+  // 있는 싸이트로 업그레이드"): 매일 07시 자동 검색 + 수동 검색 모두에서 어떤
+  // 사이트를 조회할지. "나라장터"는 항상 포함(화면에서 끌 수 없음). "LH"는 선택.
+  // "D2B"(군대)는 API 연동 전까지 화면에서 비활성화 표시만 하고 저장 값에는
+  // 나타나지 않는다.
+  enabledSources: jsonb("enabled_sources").$type<string[]>().notNull().default(["나라장터"]),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
