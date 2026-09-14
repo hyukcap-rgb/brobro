@@ -103,13 +103,30 @@ export async function sendTestEmail(to: string): Promise<void> {
     return;
   }
   try {
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: MAIL_USER,
       to,
-      subject: "나라장터 검색 시스템 - 테스트 메일",
+      subject: `나라장터 검색 시스템 - 테스트 메일 ${new Date().toISOString()}`,
       html: "<p>이 메일은 메일 발송 설정(Gmail 앱 비밀번호)이 정상 동작하는지 확인하기 위한 테스트 메일입니다.</p>",
     });
-    logger.info({ to }, "테스트 메일 발송 완료");
+    // 요구사항(2026-09-14 사용자 요청: "안왔는데" - 발송 성공 로그는 떴는데 실제
+    // 수신함에 안 보인다는 리포트): sendMail이 에러 없이 끝났다고 실제 수신함에
+    // 들어갔다는 보장은 아니다(스팸함으로 분류되거나, Gmail이 조용히 반려하는
+    // 경우가 있음). 진단을 위해 SMTP 응답 전체(수신 accepted/반려 rejected,
+    // 실제 발신 계정, message-id, 서버 응답 코드)를 남긴다.
+    logger.info(
+      {
+        to,
+        from: MAIL_USER,
+        messageId: info.messageId,
+        accepted: info.accepted,
+        rejected: info.rejected,
+        pending: (info as { pending?: unknown[] }).pending,
+        response: info.response,
+        envelope: info.envelope,
+      },
+      "테스트 메일 발송 완료",
+    );
   } catch (error) {
     logger.error({ err: error }, "테스트 메일 발송 실패");
   }
