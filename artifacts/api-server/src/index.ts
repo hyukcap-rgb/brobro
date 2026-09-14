@@ -22,6 +22,10 @@ function maybeSendTestEmail(): Promise<void> {
 // 실제 문자열 값)를 먼저 확인해야 한다. RUN_LH_API_TEST가 설정된 동안만 기동
 // 시 1회 호출해서 응답 앞부분을 로그로 남긴다 — 확인 후 이 코드와 환경변수는
 // 제거한다(본 기능 구현에는 포함되지 않는 일회성 진단 코드).
+function decodeEucKr(body: Buffer): string {
+  return new TextDecoder("euc-kr", { fatal: false }).decode(body);
+}
+
 async function maybeRunLhApiTest(): Promise<void> {
   if (!process.env.RUN_LH_API_TEST) return;
   const key = process.env.DATA_GO_KR_SERVICE_KEY;
@@ -45,7 +49,7 @@ async function maybeRunLhApiTest(): Promise<void> {
       `https://apis.data.go.kr/B552555/OpenBidInfoList/getOpenBidInfo?${bidInfoQuery}`,
     );
     logger.info(
-      { status: res.status, bodyPreview: res.body.toString("utf8").slice(0, 3000) },
+      { status: res.status, bodyPreview: decodeEucKr(res.body).slice(0, 3000) },
       "LH API 테스트: getOpenBidInfo 응답",
     );
   } catch (error) {
@@ -55,7 +59,7 @@ async function maybeRunLhApiTest(): Promise<void> {
   const tenderOpenQuery = [
     `serviceKey=${formatServiceKey(key)}`,
     "pageNo=1",
-    "numOfRows=5",
+    "numOfRows=50",
     `openDtmStart=${compactDate(start)}`,
     `openDtmEnd=${compactDate(today)}`,
   ].join("&");
@@ -63,11 +67,20 @@ async function maybeRunLhApiTest(): Promise<void> {
     const res = await requestBuffer(
       `https://apis.data.go.kr/B552555/OpenTenderopenList/getOpenTenderopenList?${tenderOpenQuery}`,
     );
+    const decoded = decodeEucKr(res.body);
+    const statusValues = Array.from(
+      new Set(
+        Array.from(decoded.matchAll(/<vndrSccfBidStatusNm>([^<]*)<\/vndrSccfBidStatusNm>/g)).map(
+          (m) => m[1].trim(),
+        ),
+      ),
+    );
     logger.info(
       {
         status: res.status,
         queryPreview: tenderOpenQuery.replace(/serviceKey=[^&]+/, "serviceKey=***"),
-        bodyPreview: res.body.toString("utf8").slice(0, 3000),
+        vndrSccfBidStatusNmValues: statusValues,
+        bodyPreview: decoded.slice(0, 3000),
       },
       "LH API 테스트: getOpenTenderopenList 응답",
     );
