@@ -33,57 +33,62 @@ async function maybeRunLhApiTest(): Promise<void> {
     logger.warn("LH API 테스트 건너뜀: DATA_GO_KR_SERVICE_KEY가 없습니다.");
     return;
   }
+  const serviceKey: string = key;
   const today = new Date();
   const start = new Date(today);
   start.setDate(today.getDate() - 30);
 
-  const bidInfoQuery = [
-    `serviceKey=${formatServiceKey(key)}`,
-    "pageNo=1",
-    "numOfRows=5",
-    `tndrbidRegDtStart=${compactDate(start)}`,
-    `tndrbidRegDtEnd=${compactDate(today)}`,
-  ].join("&");
+  // 여러 페이지에 걸쳐 상태값 enum 전체를 모은다(응답 본문 전체를 로그로
+  // 남기면 너무 커서, distinct 값만 추출).
+  async function collectDistinctValues(
+    baseUrl: string,
+    extraParams: string,
+    fieldName: string,
+    maxPages: number,
+  ): Promise<{ values: string[]; totalCount: number | null; pagesFetched: number }> {
+    const values = new Set<string>();
+    let totalCount: number | null = null;
+    let page = 1;
+    for (; page <= maxPages; page += 1) {
+      const query = [
+        `serviceKey=${formatServiceKey(serviceKey)}`,
+        `pageNo=${page}`,
+        "numOfRows=100",
+        extraParams,
+      ].join("&");
+      const res = await requestBuffer(`${baseUrl}?${query}`);
+      const decoded = decodeEucKr(res.body);
+      if (totalCount === null) {
+        const m = /<totalCount>(\d+)<\/totalCount>/.exec(decoded);
+        if (m) totalCount = Number(m[1]);
+      }
+      const re = new RegExp(`<${fieldName}>([^<]*)</${fieldName}>`, "g");
+      for (const m of decoded.matchAll(re)) values.add(m[1].trim());
+      if (!decoded.includes("<item>")) break;
+    }
+    return { values: [...values], totalCount, pagesFetched: page - 1 };
+  }
+
   try {
-    const res = await requestBuffer(
-      `https://apis.data.go.kr/B552555/OpenBidInfoList/getOpenBidInfo?${bidInfoQuery}`,
+    const result = await collectDistinctValues(
+      "https://apis.data.go.kr/B552555/OpenBidInfoList/getOpenBidInfo",
+      `tndrbidRegDtStart=${compactDate(start)}&tndrbidRegDtEnd=${compactDate(today)}`,
+      "bidProgrsStatus",
+      10,
     );
-    logger.info(
-      { status: res.status, bodyPreview: decodeEucKr(res.body).slice(0, 3000) },
-      "LH API 테스트: getOpenBidInfo 응답",
-    );
+    logger.info(result, "LH API 테스트: getOpenBidInfo bidProgrsStatus distinct 값");
   } catch (error) {
     logger.error({ err: error }, "LH API 테스트: getOpenBidInfo 실패");
   }
 
-  const tenderOpenQuery = [
-    `serviceKey=${formatServiceKey(key)}`,
-    "pageNo=1",
-    "numOfRows=50",
-    `openDtmStart=${compactDate(start)}`,
-    `openDtmEnd=${compactDate(today)}`,
-  ].join("&");
   try {
-    const res = await requestBuffer(
-      `https://apis.data.go.kr/B552555/OpenTenderopenList/getOpenTenderopenList?${tenderOpenQuery}`,
+    const result = await collectDistinctValues(
+      "https://apis.data.go.kr/B552555/OpenTenderopenList/getOpenTenderopenList",
+      `openDtmStart=${compactDate(start)}&openDtmEnd=${compactDate(today)}`,
+      "vndrSccfBidStatusNm",
+      10,
     );
-    const decoded = decodeEucKr(res.body);
-    const statusValues = Array.from(
-      new Set(
-        Array.from(decoded.matchAll(/<vndrSccfBidStatusNm>([^<]*)<\/vndrSccfBidStatusNm>/g)).map(
-          (m) => m[1].trim(),
-        ),
-      ),
-    );
-    logger.info(
-      {
-        status: res.status,
-        queryPreview: tenderOpenQuery.replace(/serviceKey=[^&]+/, "serviceKey=***"),
-        vndrSccfBidStatusNmValues: statusValues,
-        bodyPreview: decoded.slice(0, 3000),
-      },
-      "LH API 테스트: getOpenTenderopenList 응답",
-    );
+    logger.info(result, "LH API 테스트: getOpenTenderopenList vndrSccfBidStatusNm distinct 값");
   } catch (error) {
     logger.error({ err: error }, "LH API 테스트: getOpenTenderopenList 실패");
   }
