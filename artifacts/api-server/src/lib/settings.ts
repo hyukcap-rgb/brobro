@@ -46,6 +46,9 @@ export interface AppSettingsView {
   minBudgetAmount: number;
   notificationEmails: string[];
   enabledSources: string[];
+  secondaryKeywords: string[];
+  secondaryMinAwardAmount: number | null;
+  secondaryMaxAwardAmount: number | null;
   updatedAt: string;
 }
 
@@ -58,6 +61,9 @@ function toView(row: {
   minBudgetAmount: number;
   notificationEmails: string[];
   enabledSources: string[];
+  secondaryKeywords: string[];
+  secondaryMinAwardAmount: number | null;
+  secondaryMaxAwardAmount: number | null;
   updatedAt: Date;
 }): AppSettingsView {
   return {
@@ -71,6 +77,9 @@ function toView(row: {
     // "나라장터"는 화면에서 끌 수 없는 항상 포함 사이트이므로, 과거 데이터에
     // 없더라도(마이그레이션 직후 등) 항상 강제로 포함시킨다.
     enabledSources: Array.from(new Set(["나라장터", ...(row.enabledSources ?? [])])),
+    secondaryKeywords: row.secondaryKeywords ?? [],
+    secondaryMinAwardAmount: row.secondaryMinAwardAmount ?? null,
+    secondaryMaxAwardAmount: row.secondaryMaxAwardAmount ?? null,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -88,6 +97,7 @@ export async function getAppSettings(): Promise<AppSettingsView> {
       minBudgetAmount: DEFAULT_MIN_BUDGET,
       notificationEmails: [],
       enabledSources: DEFAULT_SOURCES,
+      secondaryKeywords: [],
     })
     .onConflictDoNothing()
     .returning();
@@ -107,6 +117,9 @@ export interface UpdateSettingsInput {
   minBudgetAmount?: number;
   notificationEmails?: string[];
   enabledSources?: string[];
+  secondaryKeywords?: string[];
+  secondaryMinAwardAmount?: number | null;
+  secondaryMaxAwardAmount?: number | null;
 }
 
 export async function updateAppSettings(input: UpdateSettingsInput): Promise<AppSettingsView> {
@@ -125,6 +138,16 @@ export async function updateAppSettings(input: UpdateSettingsInput): Promise<App
       // 시점에 다시 채워 넣는다(사용자가 실수로 나라장터를 끌 수 없게).
       ...(input.enabledSources
         ? { enabledSources: Array.from(new Set(["나라장터", ...input.enabledSources])) }
+        : {}),
+      // 요구사항(2026-09-15 사용자 요청: 2차 키워드): 빈 배열도 유효한 값(=2차
+      // 조건 끄기)이라 matchKeywords처럼 truthy 체크만으로 충분하다 — []는
+      // JS에서 truthy이므로 정상적으로 저장된다.
+      ...(input.secondaryKeywords ? { secondaryKeywords: input.secondaryKeywords } : {}),
+      ...(input.secondaryMinAwardAmount !== undefined
+        ? { secondaryMinAwardAmount: input.secondaryMinAwardAmount }
+        : {}),
+      ...(input.secondaryMaxAwardAmount !== undefined
+        ? { secondaryMaxAwardAmount: input.secondaryMaxAwardAmount }
         : {}),
       updatedAt: new Date(),
     })
