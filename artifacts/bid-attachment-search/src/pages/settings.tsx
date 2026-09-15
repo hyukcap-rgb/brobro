@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useGetSettings,
   useUpdateSettings,
+  useListMatches,
+  getListMatchesQueryKey,
   type AppSettingsInputWorkCategoriesItem,
   type AppSettingsInputEnabledSourcesItem,
+  type AwardedMatch,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AlertCircle, CheckCircle2, Loader2, Plus, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, ListFilter, Loader2, Plus, X } from "lucide-react";
 
 function TagEditor({
   label,
@@ -304,7 +307,12 @@ export default function Settings() {
   const [workCategories, setWorkCategories] = useState<string[]>([]);
   const [minEstimatedPrice, setMinEstimatedPrice] = useState("");
   const [maxEstimatedPrice, setMaxEstimatedPrice] = useState("");
-  const [minBudgetAmount, setMinBudgetAmount] = useState("50000000");
+  // 개선(2026-09-15 UX 리뷰): 다른 금액 필드는 비우면 "제한 없음"인데 이
+  // 필드만 항상 숫자(0)를 넣어야 해서 같은 화면 안에서 입력 규칙이 달랐다.
+  // 저장 시 빈 값은 그대로 0(=제한 없음)으로 보내는 동작은 유지하되(아래
+  // handleSave), 화면에서는 다른 금액 필드처럼 비어 있으면 "제한 없음"으로
+  // 보이게 통일한다.
+  const [minBudgetAmount, setMinBudgetAmount] = useState("");
   const [notificationEmails, setNotificationEmails] = useState<string[]>([]);
   const [enabledSources, setEnabledSources] = useState<string[]>(["나라장터"]);
   const [secondaryKeywords, setSecondaryKeywords] = useState<string[]>([]);
@@ -319,7 +327,7 @@ export default function Settings() {
     setWorkCategories(settingsQuery.data.workCategories);
     setMinEstimatedPrice(settingsQuery.data.minEstimatedPrice != null ? String(settingsQuery.data.minEstimatedPrice) : "");
     setMaxEstimatedPrice(settingsQuery.data.maxEstimatedPrice != null ? String(settingsQuery.data.maxEstimatedPrice) : "");
-    setMinBudgetAmount(String(settingsQuery.data.minBudgetAmount));
+    setMinBudgetAmount(settingsQuery.data.minBudgetAmount ? String(settingsQuery.data.minBudgetAmount) : "");
     setNotificationEmails(settingsQuery.data.notificationEmails);
     setEnabledSources(settingsQuery.data.enabledSources);
     setSecondaryKeywords(settingsQuery.data.secondaryKeywords);
@@ -337,6 +345,60 @@ export default function Settings() {
   const matchKeywordsEmpty = matchKeywords.length === 0;
   const workCategoriesEmpty = workCategories.length === 0;
   const canSave = !matchKeywordsEmpty && !workCategoriesEmpty;
+
+  // 개선(2026-09-15 UX 리뷰): 1차/2차 키워드가 서로 다른 조건을 완전히
+  // 우회하는 구조라 조건을 바꿨을 때 결과가 얼마나 달라질지 저장 전에는 알
+  // 방법이 없었다. 완전히 새로 스캔하는 건 API 한도를 쓰므로, 대신 "최근에
+  // 이미 찾아둔 리드 중 지금 화면의(아직 저장 안 한) 조건에도 해당하는 건수"를
+  // 계산해서 참고용으로 보여준다 — 조건을 완화한 경우 실제로는 더 많은 리드가
+  // 나올 수 있으므로 어디까지나 참고용 신호다.
+  const previewQuery = useListMatches(
+    { limit: 300 },
+    { query: { queryKey: getListMatchesQueryKey({ limit: 300 }) } },
+  );
+  const previewMatches = previewQuery.data?.matches ?? [];
+  const previewCount = useMemo(() => {
+    const matchesSecondary = (match: AwardedMatch) => {
+      if (secondaryKeywords.length === 0 || !match.noticeName) return false;
+      const titleHit = secondaryKeywords.some((kw) => match.noticeName!.includes(kw));
+      if (!titleHit) return false;
+      // daily-scan.ts와 동일하게: LH는 실제 낙찰금액이 없어 기초금액(예산)을
+      // 대신 비교하고, 나라장터는 실제 낙찰금액(awardAmount)을 비교한다.
+      const amount = match.source === "LH" ? match.budgetAmount : (match.awardAmount ?? match.budgetAmount);
+      if (amount == null) return false;
+      const minOk = secondaryMinAwardAmount.trim() === "" || amount >= Number(secondaryMinAwardAmount);
+      const maxOk = secondaryMaxAwardAmount.trim() === "" || amount <= Number(secondaryMaxAwardAmount);
+      return minOk && maxOk;
+    };
+    const matchesPrimary = (match: AwardedMatch) => {
+      if (match.source !== "LH" && !workCategories.includes(match.workCategory ?? "")) return false;
+      if (!match.matchedKeyword || !matchKeywords.includes(match.matchedKeyword)) return false;
+      const estimated = match.estimatedAmount ?? null;
+      if (minEstimatedPrice.trim() !== "" && (estimated == null || estimated < Number(minEstimatedPrice))) {
+        return false;
+      }
+      if (maxEstimatedPrice.trim() !== "" && (estimated == null || estimated > Number(maxEstimatedPrice))) {
+        return false;
+      }
+      const budgetFloor = match.budgetAmount ?? match.awardAmount ?? 0;
+      if (budgetFloor < (Number(minBudgetAmount) || 0)) return false;
+      return true;
+    };
+    return previewMatches.filter(
+      (match) => enabledSources.includes(match.source) && (matchesSecondary(match) || matchesPrimary(match)),
+    ).length;
+  }, [
+    previewMatches,
+    enabledSources,
+    workCategories,
+    matchKeywords,
+    minEstimatedPrice,
+    maxEstimatedPrice,
+    minBudgetAmount,
+    secondaryKeywords,
+    secondaryMinAwardAmount,
+    secondaryMaxAwardAmount,
+  ]);
 
   const handleSave = () => {
     if (!canSave) return;
@@ -474,22 +536,38 @@ export default function Settings() {
           <div className="space-y-2">
             <Label htmlFor="minBudget">최소 공사 규모 (원)</Label>
             <p className="text-xs text-muted-foreground">
-              이 금액 미만인 공고는 제외합니다. 추정가격이 없는 공고를 걸러내는 안전장치로도 쓰입니다. 현재 설정:{" "}
-              {minBudgetAmount.trim() === "" || Number.isNaN(Number(minBudgetAmount))
-                ? "미입력"
-                : `${Number(minBudgetAmount).toLocaleString("ko-KR")}원`}{" "}
-              (기본값 50,000,000원)
+              이 금액 미만인 공고는 제외합니다. 추정가격이 없는 공고를 걸러내는 안전장치로도 쓰입니다. 비워두면(제한
+              없음) 이 조건으로는 거르지 않습니다. 참고용 기본값: 50,000,000원.
             </p>
             <Input
               id="minBudget"
               type="number"
               min={0}
+              placeholder="제한 없음"
               value={minBudgetAmount}
               onChange={(event) => setMinBudgetAmount(event.target.value)}
             />
           </div>
 
           <EmailListEditor values={notificationEmails} onChange={setNotificationEmails} />
+
+          {/* 개선(2026-09-15 UX 리뷰, 항목 10) — 저장하기 전에 지금 화면의
+          조건이면 결과가 대략 얼마나 될지 미리 보여준다. 실제로는 최근에 이미
+          찾아둔 리드 중 지금 조건에도 해당하는 건수를 세는 것이라, 조건을
+          완화한 경우 실제 결과는 이보다 많아질 수 있다 — 그래서 "참고용"임을
+          분명히 밝힌다. */}
+          <div className="flex items-start gap-2 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+            <ListFilter className="h-4 w-4 mt-0.5 shrink-0" />
+            {previewQuery.isLoading ? (
+              <span>미리보기 계산 중...</span>
+            ) : (
+              <span>
+                지금 화면의 조건이라면, 최근 저장된 리드 {previewMatches.length}건 중{" "}
+                <span className="font-semibold text-foreground">{previewCount}건</span>이 해당됩니다. (저장 전
+                참고용 — 조건을 완화하면 실제로는 이보다 많아질 수 있습니다.)
+              </span>
+            )}
+          </div>
 
           {!canSave ? (
             <div className="flex items-center gap-2 text-sm text-destructive">
