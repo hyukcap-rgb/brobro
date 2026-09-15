@@ -287,6 +287,14 @@ export const AppSettingsWorkCategoriesItem = {
   공사: '공사',
 } as const;
 
+export type AppSettingsEnabledSourcesItem = typeof AppSettingsEnabledSourcesItem[keyof typeof AppSettingsEnabledSourcesItem];
+
+
+export const AppSettingsEnabledSourcesItem = {
+  나라장터: '나라장터',
+  LH: 'LH',
+} as const;
+
 export interface AppSettings {
   matchKeywords: string[];
   workTypeKeywords: string[];
@@ -299,6 +307,8 @@ export interface AppSettings {
   minBudgetAmount: number;
   /** 매일 07시(KST) 자동 검색이 끝나면 결과 요약 메일을 받을 주소 목록. 그날 새로 발견된 매칭이 있을 때만 발송한다. */
   notificationEmails: string[];
+  /** 매일 자동 검색 + 수동 검색 모두가 대상으로 삼을 사이트 목록. "나라장터"는 항상 강제 포함(화면에서 끌 수 없음). "LH"는 선택. */
+  enabledSources: AppSettingsEnabledSourcesItem[];
   updatedAt: string;
 }
 
@@ -310,6 +320,14 @@ export const AppSettingsInputWorkCategoriesItem = {
   일반용역: '일반용역',
   기술용역: '기술용역',
   공사: '공사',
+} as const;
+
+export type AppSettingsInputEnabledSourcesItem = typeof AppSettingsInputEnabledSourcesItem[keyof typeof AppSettingsInputEnabledSourcesItem];
+
+
+export const AppSettingsInputEnabledSourcesItem = {
+  나라장터: '나라장터',
+  LH: 'LH',
 } as const;
 
 export interface AppSettingsInput {
@@ -331,6 +349,7 @@ export interface AppSettingsInput {
   /** @minimum 0 */
   minBudgetAmount?: number;
   notificationEmails?: string[];
+  enabledSources?: AppSettingsInputEnabledSourcesItem[];
 }
 
 export interface AwardedMatch {
@@ -344,6 +363,8 @@ export interface AwardedMatch {
   siteName?: string | null;
   /** @nullable */
   siteOffice?: string | null;
+  /** 이 매칭을 찾아낸 사이트(나라장터/LH). siteName(현장명)과는 무관한 별도 축이다. */
+  source: string;
   /**
      * 실제 공사가 이뤄지는 현장 주소(첨부파일에 명시된 값 우선, 없으면 나라장터 공사현장지역명). 낙찰자의 사업자 소재지(bidderAddress)와는 다르다.
      * @nullable
