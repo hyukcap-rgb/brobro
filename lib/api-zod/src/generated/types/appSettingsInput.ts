@@ -28,4 +28,15 @@ export interface AppSettingsInput {
   minBudgetAmount?: number;
   notificationEmails?: string[];
   enabledSources?: AppSettingsInputEnabledSourcesItem[];
+  secondaryKeywords?: string[];
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  secondaryMinAwardAmount?: number | null;
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  secondaryMaxAwardAmount?: number | null;
 }
