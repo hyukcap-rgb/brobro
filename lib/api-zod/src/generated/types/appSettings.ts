@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AppSettingsEnabledSourcesItem } from './appSettingsEnabledSourcesItem';
 import type { AppSettingsWorkCategoriesItem } from './appSettingsWorkCategoriesItem';
 
 export interface AppSettings {
@@ -19,5 +20,7 @@ export interface AppSettings {
   minBudgetAmount: number;
   /** 매일 07시(KST) 자동 검색이 끝나면 결과 요약 메일을 받을 주소 목록. 그날 새로 발견된 매칭이 있을 때만 발송한다. */
   notificationEmails: string[];
+  /** 매일 자동 검색 + 수동 검색 모두가 대상으로 삼을 사이트 목록. "나라장터"는 항상 강제 포함(화면에서 끌 수 없음). "LH"는 선택. */
+  enabledSources: AppSettingsEnabledSourcesItem[];
   updatedAt: string;
 }
