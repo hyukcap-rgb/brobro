@@ -23,7 +23,9 @@ import {
   searchBusinessContactOnPortal,
   searchBusinessContactOnWeb,
   lookupGovCorpInfo,
+  type ExtractedSegment,
 } from "./bid-processing";
+import { fetchLhAwardsForDate, type LhBidItem } from "./lh-source";
 import { getAppSettings } from "./settings";
 import { kstToday, shiftKstDate, isKoreanHoliday, type KstDate } from "./kr-holidays";
 import { SCAN_ROOT, resolveMatchAttachmentPath } from "./scan-storage";
@@ -572,6 +574,13 @@ export async function createPendingScanRun(
   const targetDates = explicitDateRange
     ? buildDateRange(explicitDateRange.start, explicitDateRange.end)
     : await computeTargetDatesWithGapFill(); // 요구사항: 기간 지정 시 갭필 없이 그 구간만 검색, 생략 시 기존 자동 로직(전일 기준+미완료 구간 자동 보충) 사용
+  // 요구사항(2026-09-15 사용자 리포트: "대상일이 엉뚱하게 나와"): 실제로 이번
+  // 실행이 명시적 기간 요청이었는지, 갭필 자동 로직으로 빠졌는지, 그 결과
+  // targetDates가 무엇으로 계산됐는지를 남겨 원인을 바로 확인할 수 있게 한다.
+  logger.info(
+    { triggerType, explicitDateRange, targetDates: targetDates.map((d) => d.key) },
+    "createPendingScanRun: 대상 날짜 계산 결과",
+  );
   let run: DailyScanRun | undefined;
   try {
     [run] = await db
@@ -937,6 +946,87 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           }
         } finally {
           await rm(scratchDir, { recursive: true, force: true });
+        }
+      }
+    }
+
+    // 요구사항(2026-09-14 사용자 요청: "나라장터를 기본으로, 토지공사나 군대
+    // 입찰싸이트도 선택하면 검색할 수 있는 싸이트로 업그레이드"): 설정에서 LH를
+    // 켰으면 나라장터와 별도로 LH 낙찰공고도 함께 검색한다. LH는 첨부파일
+    // 다운로드 링크가 없어 공고명(제목)만으로 키워드를 찾고, 첨부파일 기반
+    // 수량 확인이 구조적으로 불가능하므로 quantityText 없이(=수량 미상) 바로
+    // 리드로 남긴다 — 사용자 확인(2026-09-14): "LH는 수량 없이도 리드로 표시".
+    // 낙찰업체명/연락처는 1차 버전에서 제공하지 않는다(사용자 확인: "1차는
+    // 업체정보 없이 출시") — lh-source.ts 상단 주석 참고.
+    if (settings.enabledSources.includes("LH")) {
+      for (const dateKey of targetDateKeys) {
+        const date = kstDateFromKey(dateKey);
+        let lhAwards: LhBidItem[] = [];
+        try {
+          lhAwards = await fetchLhAwardsForDate(date);
+        } catch (error) {
+          logger.warn({ err: error, date: dateKey }, "일별 스캔: LH 낙찰 목록 조회 실패");
+          continue;
+        }
+        awardsFound += lhAwards.length;
+
+        for (const award of lhAwards) {
+          if (!award.bidNum || !award.noticeName) continue;
+          candidatesChecked += 1;
+
+          const budgetAmount = award.fdmtlAmt;
+          if (budgetAmount != null && budgetAmount < settings.minBudgetAmount) {
+            funnel.skippedBudget += 1;
+            continue;
+          }
+          const estimatedAmount = award.presmtPrc;
+          if (estimatedAmount != null) {
+            if (settings.minEstimatedPrice != null && estimatedAmount < settings.minEstimatedPrice) {
+              funnel.skippedEstimatedPrice += 1;
+              continue;
+            }
+            if (settings.maxEstimatedPrice != null && estimatedAmount > settings.maxEstimatedPrice) {
+              funnel.skippedEstimatedPrice += 1;
+              continue;
+            }
+          }
+
+          const titleSegments: ExtractedSegment[] = [
+            { text: award.noticeName, sheet: null, page: null, location: "공고명" },
+          ];
+          const matches = searchSegments(titleSegments, settings.matchKeywords);
+          if (matches.length === 0) continue;
+
+          const noticeNumber = `LH-${award.bidNum}-${award.bidDegree}`;
+          for (const match of matches) {
+            const matchedKeyword = match.foundKeywords[0] ?? settings.matchKeywords[0] ?? "";
+            try {
+              const inserted = await db
+                .insert(awardedMatchesTable)
+                .values({
+                  scanRunId: run.id,
+                  source: "LH",
+                  noticeNumber,
+                  noticeName: award.noticeName,
+                  siteName: award.noticeName,
+                  workTypeName: award.workTypeName,
+                  demandAgency: award.zoneHqCd ? `한국토지주택공사 ${award.zoneHqCd}` : "한국토지주택공사",
+                  budgetAmount,
+                  estimatedAmount,
+                  awardDate: award.openDateKey ?? dateKey,
+                  matchedKeyword,
+                  // NULL은 유니크 인덱스에서 서로 다른 값으로 취급되어 재실행 시
+                  // 중복 삽입될 수 있어, 첨부파일이 없는 LH 매칭은 빈 문자열로
+                  // 채운다(dedupe가 정상 동작하도록).
+                  attachmentFileName: "",
+                })
+                .onConflictDoNothing()
+                .returning({ id: awardedMatchesTable.id });
+              if (inserted.length > 0) matchesFound += 1;
+            } catch (error) {
+              logger.warn({ err: error, noticeNumber }, "일별 스캔: LH 매칭 결과 저장 실패");
+            }
+          }
         }
       }
     }
