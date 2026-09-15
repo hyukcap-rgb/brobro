@@ -17,6 +17,8 @@ export interface AwardedMatch {
   siteName?: string | null;
   /** @nullable */
   siteOffice?: string | null;
+  /** 이 매칭을 찾아낸 사이트(나라장터/LH). siteName(현장명)과는 무관한 별도 축이다. */
+  source: string;
   /**
      * 실제 공사가 이뤄지는 현장 주소(첨부파일에 명시된 값 우선, 없으면 나라장터 공사현장지역명). 낙찰자의 사업자 소재지(bidderAddress)와는 다르다.
      * @nullable
