@@ -46,6 +46,14 @@ export async function ensureSchema(): Promise<void> {
     -- 컬럼이라 다른 컬럼들과 같은 방식으로 보강한다. "나라장터"는 항상 포함.
     ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS enabled_sources JSONB NOT NULL DEFAULT '["나라장터"]'::jsonb;
 
+    -- 요구사항(2026-09-15 사용자 요청: "키워드 2번째를 설정할 수 있도록 해줘.
+    -- 낙찰금액과 공사제목만 넣으면 첫번째 키워드가 없어도 검색되게 하는거야"):
+    -- 1차 키워드와 완전히 독립된 2차 조건(제목 키워드 + 낙찰금액 범위). 기존
+    -- 배포된 테이블에는 없는 컬럼이라 다른 컬럼들과 같은 방식으로 보강한다.
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS secondary_keywords JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS secondary_min_award_amount BIGINT;
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS secondary_max_award_amount BIGINT;
+
     CREATE TABLE IF NOT EXISTS daily_scan_runs (
       id SERIAL PRIMARY KEY,
       target_dates JSONB NOT NULL,
