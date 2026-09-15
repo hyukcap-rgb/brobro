@@ -732,6 +732,59 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           continue;
         }
 
+        // 요구사항(2026-09-15 사용자 요청: "키워드 2번째를 설정할 수 있도록
+        // 해줘. 낙찰금액과 공사제목만 넣으면 첫번째 키워드가 없어도 검색되게
+        // 하는거야"): 아래 1차 파이프라인(예산/추정가격/공종/첨부파일 키워드)과
+        // 완전히 독립된 2차 조건. 공고 제목에 2차 키워드가 있고 낙찰금액이
+        // 지정한 범위 안이면, 아래 필터들과 무관하게 그 자체로 리드 등록한다.
+        // 첨부파일을 보지 않으므로(=수량 확인 불가) quantityText는 비워둔다.
+        if (settings.secondaryKeywords.length > 0) {
+          const secondaryAwardAmount = Number(award.sucsfbidAmt ?? 0) || null;
+          const inSecondaryRange =
+            secondaryAwardAmount != null &&
+            (settings.secondaryMinAwardAmount == null || secondaryAwardAmount >= settings.secondaryMinAwardAmount) &&
+            (settings.secondaryMaxAwardAmount == null || secondaryAwardAmount <= settings.secondaryMaxAwardAmount);
+          if (inSecondaryRange) {
+            const secondaryTitleSegments: ExtractedSegment[] = [
+              { text: String(detail.bidNtceNm ?? ""), sheet: null, page: null, location: "공고명" },
+            ];
+            const secondaryMatches = searchSegments(secondaryTitleSegments, settings.secondaryKeywords);
+            for (const match of secondaryMatches) {
+              const matchedKeyword = match.foundKeywords[0] ?? settings.secondaryKeywords[0] ?? "";
+              const secondaryBudgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0) || null;
+              const secondaryEstimatedAmount = Number(detail.presmptPrce ?? 0) || null;
+              try {
+                const inserted = await db
+                  .insert(awardedMatchesTable)
+                  .values({
+                    scanRunId: run.id,
+                    noticeNumber,
+                    noticeName: String(detail.bidNtceNm ?? "").trim() || null,
+                    siteName: String(detail.bidNtceNm ?? "").trim() || null,
+                    workCategory: source,
+                    demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
+                    bidderName: String(award.bidwinnrNm ?? "").trim() || null,
+                    bidderBizno: String(award.bidwinnrBizno ?? "").trim() || null,
+                    budgetAmount: secondaryBudgetAmount,
+                    estimatedAmount: secondaryEstimatedAmount,
+                    awardAmount: secondaryAwardAmount,
+                    awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
+                    matchedKeyword,
+                    // NULL은 유니크 인덱스에서 서로 다른 값으로 취급되어 재실행
+                    // 시 중복 삽입될 수 있어, 첨부파일이 없는 2차 조건 매칭은
+                    // LH와 동일하게 빈 문자열로 채운다(dedupe가 정상 동작하도록).
+                    attachmentFileName: "",
+                  })
+                  .onConflictDoNothing()
+                  .returning({ id: awardedMatchesTable.id });
+                if (inserted.length > 0) matchesFound += 1;
+              } catch (error) {
+                logger.warn({ err: error, noticeNumber }, "일별 스캔: 2차 조건 매칭 결과 저장 실패");
+              }
+            }
+          }
+        }
+
         // 요구사항 3: 공사 규모 필터 (최종 확인).
         const budgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0);
         if (budgetAmount < settings.minBudgetAmount) {
@@ -973,6 +1026,52 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         for (const award of lhAwards) {
           if (!award.bidNum || !award.noticeName) continue;
           candidatesChecked += 1;
+
+          // 요구사항(2026-09-15 사용자 요청: 2차 키워드 — 낙찰금액과 공사제목만
+          // 넣으면 1차 키워드가 없어도 검색): 나라장터와 동일한 2차 조건.
+          // LH는 실제 낙찰금액(sucsfbidAmt에 해당하는 필드)을 제공하지 않아
+          // (lh-source.ts 상단 주석 참고) 기초금액(fdmtlAmt, 예산)을 대신
+          // 비교 기준으로 쓴다.
+          if (settings.secondaryKeywords.length > 0) {
+            const secondaryProxyAmount = award.fdmtlAmt;
+            const inSecondaryRange =
+              secondaryProxyAmount != null &&
+              (settings.secondaryMinAwardAmount == null || secondaryProxyAmount >= settings.secondaryMinAwardAmount) &&
+              (settings.secondaryMaxAwardAmount == null || secondaryProxyAmount <= settings.secondaryMaxAwardAmount);
+            if (inSecondaryRange) {
+              const secondaryTitleSegments: ExtractedSegment[] = [
+                { text: award.noticeName, sheet: null, page: null, location: "공고명" },
+              ];
+              const secondaryMatches = searchSegments(secondaryTitleSegments, settings.secondaryKeywords);
+              const secondaryNoticeNumber = `LH-${award.bidNum}-${award.bidDegree}`;
+              for (const match of secondaryMatches) {
+                const matchedKeyword = match.foundKeywords[0] ?? settings.secondaryKeywords[0] ?? "";
+                try {
+                  const inserted = await db
+                    .insert(awardedMatchesTable)
+                    .values({
+                      scanRunId: run.id,
+                      source: "LH",
+                      noticeNumber: secondaryNoticeNumber,
+                      noticeName: award.noticeName,
+                      siteName: award.noticeName,
+                      workTypeName: award.workTypeName,
+                      demandAgency: award.zoneHqCd ? `한국토지주택공사 ${award.zoneHqCd}` : "한국토지주택공사",
+                      budgetAmount: award.fdmtlAmt,
+                      estimatedAmount: award.presmtPrc,
+                      awardDate: award.openDateKey ?? dateKey,
+                      matchedKeyword,
+                      attachmentFileName: "",
+                    })
+                    .onConflictDoNothing()
+                    .returning({ id: awardedMatchesTable.id });
+                  if (inserted.length > 0) matchesFound += 1;
+                } catch (error) {
+                  logger.warn({ err: error, noticeNumber: secondaryNoticeNumber }, "일별 스캔: LH 2차 조건 매칭 결과 저장 실패");
+                }
+              }
+            }
+          }
 
           const budgetAmount = award.fdmtlAmt;
           if (budgetAmount != null && budgetAmount < settings.minBudgetAmount) {
