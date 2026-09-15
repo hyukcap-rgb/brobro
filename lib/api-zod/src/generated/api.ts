@@ -56,6 +56,9 @@ export const GetSettingsResponse = zod.object({
   "minBudgetAmount": zod.number(),
   "notificationEmails": zod.array(zod.string()).describe('매일 07시(KST) 자동 검색이 끝나면 결과 요약 메일을 받을 주소 목록. 그날 새로 발견된 매칭이 있을 때만 발송한다.'),
   "enabledSources": zod.array(zod.enum(['나라장터', 'LH'])).describe('매일 자동 검색 + 수동 검색 모두가 대상으로 삼을 사이트 목록. \"나라장터\"는 항상 강제 포함(화면에서 끌 수 없음). \"LH\"는 선택.'),
+  "secondaryKeywords": zod.array(zod.string()).describe('1차 키워드(matchKeywords)와 완전히 독립된 2차 조건용 키워드. 공고 제목에 이 중 하나라도 있고 낙찰금액이 secondaryMinAwardAmount~ secondaryMaxAwardAmount 범위 안이면, 업무구분\/추정가격\/최소공사규모\/ 첨부파일 존재 여부와 무관하게 리드로 등록한다. 비어 있으면 이 조건을 쓰지 않는다.'),
+  "secondaryMinAwardAmount": zod.number().nullish(),
+  "secondaryMaxAwardAmount": zod.number().nullish(),
   "updatedAt": zod.string()
 })
 
@@ -71,6 +74,10 @@ export const updateSettingsBodyMaxEstimatedPriceMin = 0;
 
 export const updateSettingsBodyMinBudgetAmountMin = 0;
 
+export const updateSettingsBodySecondaryMinAwardAmountMin = 0;
+
+export const updateSettingsBodySecondaryMaxAwardAmountMin = 0;
+
 
 
 export const UpdateSettingsBody = zod.object({
@@ -81,7 +88,10 @@ export const UpdateSettingsBody = zod.object({
   "maxEstimatedPrice": zod.number().min(updateSettingsBodyMaxEstimatedPriceMin).nullish(),
   "minBudgetAmount": zod.number().min(updateSettingsBodyMinBudgetAmountMin).optional(),
   "notificationEmails": zod.array(zod.string()).optional(),
-  "enabledSources": zod.array(zod.enum(['나라장터', 'LH'])).optional()
+  "enabledSources": zod.array(zod.enum(['나라장터', 'LH'])).optional(),
+  "secondaryKeywords": zod.array(zod.string()).optional(),
+  "secondaryMinAwardAmount": zod.number().min(updateSettingsBodySecondaryMinAwardAmountMin).nullish(),
+  "secondaryMaxAwardAmount": zod.number().min(updateSettingsBodySecondaryMaxAwardAmountMin).nullish()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -93,6 +103,9 @@ export const UpdateSettingsResponse = zod.object({
   "minBudgetAmount": zod.number(),
   "notificationEmails": zod.array(zod.string()).describe('매일 07시(KST) 자동 검색이 끝나면 결과 요약 메일을 받을 주소 목록. 그날 새로 발견된 매칭이 있을 때만 발송한다.'),
   "enabledSources": zod.array(zod.enum(['나라장터', 'LH'])).describe('매일 자동 검색 + 수동 검색 모두가 대상으로 삼을 사이트 목록. \"나라장터\"는 항상 강제 포함(화면에서 끌 수 없음). \"LH\"는 선택.'),
+  "secondaryKeywords": zod.array(zod.string()).describe('1차 키워드(matchKeywords)와 완전히 독립된 2차 조건용 키워드. 공고 제목에 이 중 하나라도 있고 낙찰금액이 secondaryMinAwardAmount~ secondaryMaxAwardAmount 범위 안이면, 업무구분\/추정가격\/최소공사규모\/ 첨부파일 존재 여부와 무관하게 리드로 등록한다. 비어 있으면 이 조건을 쓰지 않는다.'),
+  "secondaryMinAwardAmount": zod.number().nullish(),
+  "secondaryMaxAwardAmount": zod.number().nullish(),
   "updatedAt": zod.string()
 })
 
