@@ -22,5 +22,11 @@ export interface AppSettings {
   notificationEmails: string[];
   /** 매일 자동 검색 + 수동 검색 모두가 대상으로 삼을 사이트 목록. "나라장터"는 항상 강제 포함(화면에서 끌 수 없음). "LH"는 선택. */
   enabledSources: AppSettingsEnabledSourcesItem[];
+  /** 1차 키워드(matchKeywords)와 완전히 독립된 2차 조건용 키워드. 공고 제목에 이 중 하나라도 있고 낙찰금액이 secondaryMinAwardAmount~ secondaryMaxAwardAmount 범위 안이면, 업무구분/추정가격/최소공사규모/ 첨부파일 존재 여부와 무관하게 리드로 등록한다. 비어 있으면 이 조건을 쓰지 않는다. */
+  secondaryKeywords: string[];
+  /** @nullable */
+  secondaryMinAwardAmount?: number | null;
+  /** @nullable */
+  secondaryMaxAwardAmount?: number | null;
   updatedAt: string;
 }
