@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { useGetSettings, useUpdateSettings, type AppSettingsInputWorkCategoriesItem } from "@workspace/api-client-react";
+import {
+  useGetSettings,
+  useUpdateSettings,
+  type AppSettingsInputWorkCategoriesItem,
+  type AppSettingsInputEnabledSourcesItem,
+} from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -232,6 +237,65 @@ function WorkCategoryPicker({
   );
 }
 
+// 요구사항(2026-09-14 사용자 요청: "나라장터를 기본으로, 토지공사나 군대
+// 입찰싸이트도 선택하면 검색할 수 있는 싸이트로 업그레이드"): 매일 자동 검색 +
+// 수동 검색 모두의 대상 사이트. "나라장터"는 항상 켜져 있고 끌 수 없다(체크박스
+// 비활성화). "LH"는 선택. "D2B"(군대)는 아직 API 연동이 없어 비활성화 표시만
+// 한다 — WorkCategoryPicker의 UNSUPPORTED_CATEGORIES와 같은 패턴.
+const SELECTABLE_SOURCES = ["LH"] as const;
+const UNSUPPORTED_SOURCES = ["D2B(군대)"] as const;
+
+function SiteSourcePicker({
+  values,
+  onChange,
+}: {
+  values: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const toggle = (source: string) => {
+    if (values.includes(source)) onChange(values.filter((item) => item !== source));
+    else onChange([...values, source]);
+  };
+
+  return (
+    <div className="space-y-2">
+      <Label>대상 사이트</Label>
+      <p className="text-xs text-muted-foreground">
+        매일 자동 검색과 "지금 실행" 모두 여기서 선택한 사이트를 대상으로 합니다. LH는 첨부파일 다운로드
+        링크가 없어 공고명(제목)만으로 키워드를 찾고, 낙찰업체명/연락처는 제공하지 않습니다.
+      </p>
+      <div className="flex flex-wrap gap-x-4 gap-y-2">
+        <label className="flex items-center gap-1.5 text-sm text-muted-foreground cursor-not-allowed">
+          <input type="checkbox" checked disabled className="h-4 w-4 rounded border-input" />
+          나라장터 (항상 포함)
+        </label>
+        {SELECTABLE_SOURCES.map((source) => (
+          <label key={source} className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={values.includes(source)}
+              onChange={() => toggle(source)}
+              className="h-4 w-4 rounded border-input"
+            />
+            {source}
+          </label>
+        ))}
+        {UNSUPPORTED_SOURCES.map((source) => (
+          <Tooltip key={source}>
+            <TooltipTrigger asChild>
+              <label className="flex items-center gap-1.5 text-sm text-muted-foreground cursor-not-allowed">
+                <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded border-input" />
+                {source}
+              </label>
+            </TooltipTrigger>
+            <TooltipContent>아직 API 연동 전이라 지원하지 않습니다.</TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Settings() {
   const settingsQuery = useGetSettings();
   const updateSettings = useUpdateSettings();
@@ -242,6 +306,7 @@ export default function Settings() {
   const [maxEstimatedPrice, setMaxEstimatedPrice] = useState("");
   const [minBudgetAmount, setMinBudgetAmount] = useState("50000000");
   const [notificationEmails, setNotificationEmails] = useState<string[]>([]);
+  const [enabledSources, setEnabledSources] = useState<string[]>(["나라장터"]);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -253,6 +318,7 @@ export default function Settings() {
     setMaxEstimatedPrice(settingsQuery.data.maxEstimatedPrice != null ? String(settingsQuery.data.maxEstimatedPrice) : "");
     setMinBudgetAmount(String(settingsQuery.data.minBudgetAmount));
     setNotificationEmails(settingsQuery.data.notificationEmails);
+    setEnabledSources(settingsQuery.data.enabledSources);
   }, [settingsQuery.data]);
 
   // 요구사항(설정 저장 오류 명확화, 2026-09-09): 서버까지 갔다가 400으로
@@ -276,6 +342,8 @@ export default function Settings() {
           maxEstimatedPrice: maxEstimatedPrice.trim() === "" ? null : Number(maxEstimatedPrice),
           minBudgetAmount: Number(minBudgetAmount) || 0,
           notificationEmails,
+          // SELECTABLE_SOURCES ∪ 나라장터가 서버 스키마의 enum과 동일한 값이므로 안전한 캐스팅이다.
+          enabledSources: enabledSources as AppSettingsInputEnabledSourcesItem[],
         },
       },
       { onSuccess: () => setSaved(true) },
@@ -302,6 +370,8 @@ export default function Settings() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          <SiteSourcePicker values={enabledSources} onChange={setEnabledSources} />
+
           <WorkCategoryPicker values={workCategories} onChange={setWorkCategories} />
 
           <div className="grid grid-cols-2 gap-4">
