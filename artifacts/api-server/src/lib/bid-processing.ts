@@ -815,12 +815,12 @@ export function normalizeItems(payload: unknown): Record<string, unknown>[] {
   return [];
 }
 
-function tagValue(xml: string, name: string): string {
+export function tagValue(xml: string, name: string): string {
   const match = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`, "i").exec(xml);
   return match ? decodeXml(match[1]).trim() : "";
 }
 
-function parseXmlItems(xml: string): Record<string, unknown>[] {
+export function parseXmlItems(xml: string): Record<string, unknown>[] {
   return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].map((match) => {
     const item: Record<string, unknown> = {};
     for (const tag of match[1].matchAll(/<([A-Za-z0-9_]+)>([\s\S]*?)<\/\1>/g)) {
