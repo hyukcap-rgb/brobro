@@ -55,6 +55,7 @@ export const GetSettingsResponse = zod.object({
   "maxEstimatedPrice": zod.number().nullish(),
   "minBudgetAmount": zod.number(),
   "notificationEmails": zod.array(zod.string()).describe('매일 07시(KST) 자동 검색이 끝나면 결과 요약 메일을 받을 주소 목록. 그날 새로 발견된 매칭이 있을 때만 발송한다.'),
+  "enabledSources": zod.array(zod.enum(['나라장터', 'LH'])).describe('매일 자동 검색 + 수동 검색 모두가 대상으로 삼을 사이트 목록. \"나라장터\"는 항상 강제 포함(화면에서 끌 수 없음). \"LH\"는 선택.'),
   "updatedAt": zod.string()
 })
 
@@ -79,7 +80,8 @@ export const UpdateSettingsBody = zod.object({
   "minEstimatedPrice": zod.number().min(updateSettingsBodyMinEstimatedPriceMin).nullish(),
   "maxEstimatedPrice": zod.number().min(updateSettingsBodyMaxEstimatedPriceMin).nullish(),
   "minBudgetAmount": zod.number().min(updateSettingsBodyMinBudgetAmountMin).optional(),
-  "notificationEmails": zod.array(zod.string()).optional()
+  "notificationEmails": zod.array(zod.string()).optional(),
+  "enabledSources": zod.array(zod.enum(['나라장터', 'LH'])).optional()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -90,6 +92,7 @@ export const UpdateSettingsResponse = zod.object({
   "maxEstimatedPrice": zod.number().nullish(),
   "minBudgetAmount": zod.number(),
   "notificationEmails": zod.array(zod.string()).describe('매일 07시(KST) 자동 검색이 끝나면 결과 요약 메일을 받을 주소 목록. 그날 새로 발견된 매칭이 있을 때만 발송한다.'),
+  "enabledSources": zod.array(zod.enum(['나라장터', 'LH'])).describe('매일 자동 검색 + 수동 검색 모두가 대상으로 삼을 사이트 목록. \"나라장터\"는 항상 강제 포함(화면에서 끌 수 없음). \"LH\"는 선택.'),
   "updatedAt": zod.string()
 })
 
@@ -109,6 +112,7 @@ export const ListMatchesResponse = zod.object({
   "noticeName": zod.string().nullish(),
   "siteName": zod.string().nullish(),
   "siteOffice": zod.string().nullish(),
+  "source": zod.string().describe('이 매칭을 찾아낸 사이트(나라장터\/LH). siteName(현장명)과는 무관한 별도 축이다.'),
   "siteAddress": zod.string().nullish().describe('실제 공사가 이뤄지는 현장 주소(첨부파일에 명시된 값 우선, 없으면 나라장터 공사현장지역명). 낙찰자의 사업자 소재지(bidderAddress)와는 다르다.'),
   "workTypeName": zod.string().nullish(),
   "workCategory": zod.string().nullish().describe('이 공고를 찾아낸 업무구분(물품\/용역\/공사).'),
