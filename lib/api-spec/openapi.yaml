@@ -775,6 +775,14 @@ components:
             그날 새로 발견된 매칭이 있을 때만 발송한다.
           items:
             type: string
+        enabledSources:
+          type: array
+          description: >-
+            매일 자동 검색 + 수동 검색 모두가 대상으로 삼을 사이트 목록.
+            "나라장터"는 항상 강제 포함(화면에서 끌 수 없음). "LH"는 선택.
+          items:
+            type: string
+            enum: [나라장터, LH]
         updatedAt:
           type: string
       required:
@@ -783,6 +791,7 @@ components:
         - workCategories
         - minBudgetAmount
         - notificationEmails
+        - enabledSources
         - updatedAt
     AppSettingsInput:
       type: object
@@ -815,6 +824,11 @@ components:
           type: array
           items:
             type: string
+        enabledSources:
+          type: array
+          items:
+            type: string
+            enum: [나라장터, LH]
     AwardedMatch:
       type: object
       properties:
@@ -830,6 +844,9 @@ components:
           type: ["string", "null"]
         siteOffice:
           type: ["string", "null"]
+        source:
+          type: string
+          description: 이 매칭을 찾아낸 사이트(나라장터/LH). siteName(현장명)과는 무관한 별도 축이다.
         siteAddress:
           type: ["string", "null"]
           description: 실제 공사가 이뤄지는 현장 주소(첨부파일에 명시된 값 우선, 없으면 나라장터 공사현장지역명). 낙찰자의 사업자 소재지(bidderAddress)와는 다르다.
@@ -877,6 +894,7 @@ components:
       required:
         - id
         - noticeNumber
+        - source
         - matchedKeyword
         - createdAt
     MatchListResponse:
