@@ -26,6 +26,10 @@ export const awardedMatchesTable = pgTable(
     workTypeName: text("work_type_name"),
     // 이 공고를 어떤 업무구분 API(물품/용역/공사)로 찾았는지.
     workCategory: text("work_category"),
+    // 요구사항(2026-09-14 사용자 요청: "나라장터를 기본으로, 토지공사나 군대
+    // 입찰싸이트도 선택하면 검색할 수 있도록"): 이 매칭을 어느 사이트(나라장터/LH)
+    // 에서 찾았는지. siteName(현장명)과는 무관한 별도 축이다.
+    source: text("source").notNull().default("나라장터"),
     demandAgency: text("demand_agency"),
     bidderName: text("bidder_name"),
     bidderBizno: text("bidder_bizno"),
@@ -56,6 +60,7 @@ export const awardedMatchesTable = pgTable(
     // attachment / different matched keyword), but the exact same hit should
     // never be inserted twice across scan reruns.
     uniqueIndex("awarded_matches_unique_hit").on(
+      table.source,
       table.noticeNumber,
       table.matchedKeyword,
       table.attachmentFileName,
