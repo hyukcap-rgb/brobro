@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AppSettingsInputEnabledSourcesItem } from './appSettingsInputEnabledSourcesItem';
 import type { AppSettingsInputWorkCategoriesItem } from './appSettingsInputWorkCategoriesItem';
 
 export interface AppSettingsInput {
@@ -26,4 +27,5 @@ export interface AppSettingsInput {
   /** @minimum 0 */
   minBudgetAmount?: number;
   notificationEmails?: string[];
+  enabledSources?: AppSettingsInputEnabledSourcesItem[];
 }
