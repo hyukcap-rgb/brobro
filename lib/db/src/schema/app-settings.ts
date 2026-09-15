@@ -25,6 +25,15 @@ export const appSettingsTable = pgTable("app_settings", {
   // "D2B"(군대)는 API 연동 전까지 화면에서 비활성화 표시만 하고 저장 값에는
   // 나타나지 않는다.
   enabledSources: jsonb("enabled_sources").$type<string[]>().notNull().default(["나라장터"]),
+  // 요구사항(2026-09-15 사용자 요청: "키워드 2번째를 설정할 수 있도록 해줘.
+  // 낙찰금액과 공사제목만 넣으면 첫번째 키워드가 없어도 검색되게 하는거야"):
+  // 1차 키워드(matchKeywords, 첨부파일 내용 검색)와 완전히 독립된 2차 조건.
+  // 공고 제목에 이 키워드 중 하나라도 있고 낙찰금액이 아래 범위 안이면,
+  // 업무구분/추정가격/최소공사규모/첨부파일 존재 여부와 무관하게 리드로
+  // 등록한다 — daily-scan.ts 참고. 비어 있으면(기본값) 이 조건을 쓰지 않는다.
+  secondaryKeywords: jsonb("secondary_keywords").$type<string[]>().notNull().default([]),
+  secondaryMinAwardAmount: bigint("secondary_min_award_amount", { mode: "number" }),
+  secondaryMaxAwardAmount: bigint("secondary_max_award_amount", { mode: "number" }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
