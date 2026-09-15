@@ -7,7 +7,9 @@
  */
 
 export * from './appSettings';
+export * from './appSettingsEnabledSourcesItem';
 export * from './appSettingsInput';
+export * from './appSettingsInputEnabledSourcesItem';
 export * from './appSettingsInputWorkCategoriesItem';
 export * from './appSettingsWorkCategoriesItem';
 export * from './authUser';
