@@ -6,7 +6,7 @@ import {
   getListMatchesQueryKey,
   getListScansQueryKey,
 } from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -215,6 +215,12 @@ export default function Matches() {
       query: {
         queryKey: getListScansQueryKey({ limit: SCAN_HISTORY_PAGE_SIZE, offset: scanPage * SCAN_HISTORY_PAGE_SIZE }),
         refetchInterval: 15_000,
+        // 버그 수정(2026-09-15 테스트팀 QA에서 발견): offset이 바뀌는 순간
+        // react-query가 잠시 data를 undefined로 돌려주는데, 아래 totalScanPages
+        // 계산 effect가 그 틈에 "총 페이지 수 1"로 착각해 scanPage를 0으로
+        // 되돌려버려 "다음" 버튼이 사실상 동작하지 않았다(요청은 나가지만 즉시
+        // 취소됨). placeholderData로 이전 페이지 데이터를 유지해 그 틈을 없앤다.
+        placeholderData: keepPreviousData,
       },
     },
   );
