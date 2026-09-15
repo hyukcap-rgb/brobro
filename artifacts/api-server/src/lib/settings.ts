@@ -27,6 +27,16 @@ export type WorkCategory = (typeof SUPPORTED_WORK_CATEGORIES)[number];
 const DEFAULT_WORK_CATEGORIES: WorkCategory[] = ["물품", "일반용역", "기술용역", "공사"];
 const DEFAULT_MIN_BUDGET = 50_000_000;
 
+// 요구사항(2026-09-14 사용자 요청: "나라장터를 기본으로, 토지공사나 군대 입찰싸이트도
+// 선택하면 검색할 수 있도록"): 매일 07시 자동 검색 + 수동 검색 모두가 대상으로
+// 삼을 사이트 목록. "나라장터"는 항상 강제 포함(화면에서 끌 수 없음). "D2B"(군대)는
+// 아직 API 연동이 없어 SUPPORTED_SOURCES에 포함하지 않는다 — 화면에는 비활성화
+// 표시만 한다.
+export const SUPPORTED_SOURCES = ["나라장터", "LH"] as const;
+export type SiteSource = (typeof SUPPORTED_SOURCES)[number];
+
+const DEFAULT_SOURCES: SiteSource[] = ["나라장터"];
+
 export interface AppSettingsView {
   matchKeywords: string[];
   workTypeKeywords: string[];
@@ -35,6 +45,7 @@ export interface AppSettingsView {
   maxEstimatedPrice: number | null;
   minBudgetAmount: number;
   notificationEmails: string[];
+  enabledSources: string[];
   updatedAt: string;
 }
 
@@ -46,6 +57,7 @@ function toView(row: {
   maxEstimatedPrice: number | null;
   minBudgetAmount: number;
   notificationEmails: string[];
+  enabledSources: string[];
   updatedAt: Date;
 }): AppSettingsView {
   return {
@@ -56,6 +68,9 @@ function toView(row: {
     maxEstimatedPrice: row.maxEstimatedPrice ?? null,
     minBudgetAmount: row.minBudgetAmount,
     notificationEmails: row.notificationEmails ?? [],
+    // "나라장터"는 화면에서 끌 수 없는 항상 포함 사이트이므로, 과거 데이터에
+    // 없더라도(마이그레이션 직후 등) 항상 강제로 포함시킨다.
+    enabledSources: Array.from(new Set(["나라장터", ...(row.enabledSources ?? [])])),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -72,6 +87,7 @@ export async function getAppSettings(): Promise<AppSettingsView> {
       workCategories: DEFAULT_WORK_CATEGORIES,
       minBudgetAmount: DEFAULT_MIN_BUDGET,
       notificationEmails: [],
+      enabledSources: DEFAULT_SOURCES,
     })
     .onConflictDoNothing()
     .returning();
@@ -90,6 +106,7 @@ export interface UpdateSettingsInput {
   maxEstimatedPrice?: number | null;
   minBudgetAmount?: number;
   notificationEmails?: string[];
+  enabledSources?: string[];
 }
 
 export async function updateAppSettings(input: UpdateSettingsInput): Promise<AppSettingsView> {
@@ -104,6 +121,11 @@ export async function updateAppSettings(input: UpdateSettingsInput): Promise<App
       ...(input.maxEstimatedPrice !== undefined ? { maxEstimatedPrice: input.maxEstimatedPrice } : {}),
       ...(input.minBudgetAmount !== undefined ? { minBudgetAmount: input.minBudgetAmount } : {}),
       ...(input.notificationEmails ? { notificationEmails: input.notificationEmails } : {}),
+      // "나라장터"는 항상 강제 포함 — 화면에서 체크를 뺀 값이 그대로 와도 저장
+      // 시점에 다시 채워 넣는다(사용자가 실수로 나라장터를 끌 수 없게).
+      ...(input.enabledSources
+        ? { enabledSources: Array.from(new Set(["나라장터", ...input.enabledSources])) }
+        : {}),
       updatedAt: new Date(),
     })
     .where(eq(appSettingsTable.id, 1))
