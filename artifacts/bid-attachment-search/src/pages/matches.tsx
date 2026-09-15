@@ -12,9 +12,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { toast } from "@/hooks/use-toast";
 import {
   Download, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
-  MapPin, Phone, CalendarSearch, Search, Paperclip, X, ListFilter, Package,
+  MapPin, Phone, CalendarSearch, Search, Paperclip, X, ListFilter, Package, Info,
   ChevronDown, ChevronRight, ChevronLeft, ArrowUp, ArrowDown, ArrowUpDown,
   Copy, Check,
 } from "lucide-react";
@@ -168,15 +170,27 @@ function CopyNoticeNumberButton({ value }: { value: string }) {
   );
 }
 
-function scanStatusBadge(status: string) {
-  if (status === "completed") {
+// 버그 수정(2026-09-15 UX 리뷰): status만 보고 초록 "완료" 배지를 달면,
+// 공공데이터포털 한도초과 등으로 일부 공고를 확인하지 못한 실행도 똑같이
+// "완료"로 보여서 리드 누락을 알아채기 어려웠다. errorMessage가 있는데
+// status가 completed인 경우(=부분적으로만 확인됨)는 노란 "부분완료"로
+// 구분한다.
+function scanStatusBadge(scan: { status: string; errorMessage?: string | null }) {
+  if (scan.status === "completed") {
+    if (scan.errorMessage) {
+      return (
+        <Badge variant="outline" className="gap-1 text-amber-700 border-amber-300 bg-amber-50">
+          <AlertCircle className="h-3 w-3" /> 부분완료
+        </Badge>
+      );
+    }
     return (
       <Badge variant="outline" className="gap-1 text-green-700 border-green-300">
         <CheckCircle2 className="h-3 w-3" /> 완료
       </Badge>
     );
   }
-  if (status === "failed") {
+  if (scan.status === "failed") {
     return (
       <Badge variant="outline" className="gap-1 text-destructive border-destructive/40">
         <XCircle className="h-3 w-3" /> 실패
@@ -335,11 +349,23 @@ export default function Matches() {
     setGroupPage(0);
   }, [selectedScanRunId]);
 
+  // 버그 수정(2026-09-15 UX 리뷰): "지금 실행"/"이 기간으로 검색"을 누르면
+  // POST 요청 자체는 곧바로 끝나 버튼이 바로 다시 눌릴 수 있게 되는데, 실제
+  // 스캔은 서버에서 계속 진행 중이라 화면에는 아무 변화가 없다. "안 눌렸나?"
+  // 하고 같은 대상일을 여러 번 재실행하면 공공데이터포털 API 한도만 낭비된다
+  // (실제로 하루에 같은 날짜를 6번 넘게 재실행한 이력이 있었다). 실행 시작을
+  // 토스트로 알리고, 결과 반영 전까지(20초) 버튼을 잠가 중복 클릭을 막는다.
+  const [justTriggered, setJustTriggered] = useState(false);
   const runScan = (range?: { startDate: string; endDate: string }) => {
     triggerScan.mutate(
       { data: range ? range : {} },
       {
         onSuccess: () => {
+          toast({
+            title: "자동검색 실행을 시작했습니다",
+            description: "완료까지 몇 분 정도 걸릴 수 있습니다. 끝나면 아래 표가 자동으로 갱신됩니다.",
+          });
+          setJustTriggered(true);
           // 요구사항(2026-09-13): 페이지네이션 도입으로 limit/offset 조합별로
           // 쿼리 키가 달라지므로, 파라미터 없이 호출해 "/api/scans"로 시작하는
           // 모든 페이지의 캐시를 한번에 무효화한다(현재 보고 있는 페이지가
@@ -348,7 +374,15 @@ export default function Matches() {
           setTimeout(() => {
             void queryClient.invalidateQueries({ queryKey: getListMatchesQueryKey({ limit: 500 }) });
             void queryClient.invalidateQueries({ queryKey: getListScansQueryKey() });
+            setJustTriggered(false);
           }, 20_000);
+        },
+        onError: () => {
+          toast({
+            title: "실행에 실패했습니다",
+            description: "잠시 후 다시 시도해 주세요.",
+            variant: "destructive",
+          });
         },
       },
     );
@@ -499,9 +533,10 @@ export default function Matches() {
                       </TableHead>
                       {/* 요구사항(2026-09-13 사용자 요청: "낙찰받은 사람의 사무실과
                       실제 공사 현장을 모두 검색해서 결과에 보여줘"): 사업자 주소와
-                      실제 공사현장 주소를 둘 다 보여준다. */}
-                      <TableHead className="px-2">사업자 주소</TableHead>
-                      <TableHead className="px-2">현장 주소</TableHead>
+                      실제 공사현장 주소를 둘 다 보여준다 — 다만 현장 주소가
+                      제공되지 않는 경우가 대부분이라(2026-09-15 UX 리뷰), 별도
+                      컬럼 대신 클릭하면 둘 다 보여주는 팝오버 하나로 합친다. */}
+                      <TableHead className="px-2">주소</TableHead>
                       <TableHead className="px-2">연락처</TableHead>
                       <TableHead className="px-2">첨부파일</TableHead>
                     </TableRow>
@@ -512,7 +547,7 @@ export default function Matches() {
                       return (
                         <Fragment key={dateKey}>
                           <TableRow className="bg-muted/40 hover:bg-muted/40">
-                            <TableCell colSpan={9} className="py-2 px-2">
+                            <TableCell colSpan={8} className="py-2 px-2">
                               <button
                                 type="button"
                                 onClick={() => toggleDateCollapsed(dateKey)}
@@ -532,7 +567,23 @@ export default function Matches() {
                             : items.map((match) => (
                     <TableRow key={match.id}>
                       <TableCell className="px-2 whitespace-nowrap">
-                        <CopyNoticeNumberButton value={match.noticeNumber} />
+                        <div className="flex items-center gap-1.5">
+                          {/* 개선(2026-09-15 UX 리뷰): 리드가 나라장터에서 왔는지
+                          LH에서 왔는지 화면 어디에도 표시가 없어서, 공고번호가
+                          "LH-"로 시작하는지 같은 간접 단서로만 구분할 수
+                          있었다. 출처 배지를 명시적으로 붙인다. */}
+                          <Badge
+                            variant="outline"
+                            className={
+                              match.source === "LH"
+                                ? "shrink-0 px-1.5 py-0 text-[10px] font-normal text-blue-700 border-blue-300"
+                                : "shrink-0 px-1.5 py-0 text-[10px] font-normal text-muted-foreground"
+                            }
+                          >
+                            {match.source}
+                          </Badge>
+                          <CopyNoticeNumberButton value={match.noticeNumber} />
+                        </div>
                       </TableCell>
                       <TableCell className="px-2 whitespace-nowrap">{match.awardDate ?? "-"}</TableCell>
                       {/* 요구사항(2026-09-10 사용자 요청: "검색 결과에
@@ -551,14 +602,18 @@ export default function Matches() {
                           "-"
                         )}
                       </TableCell>
+                      {/* 개선(2026-09-15 UX 리뷰): break-words로 두면 긴
+                      상호명이 3~4줄로 줄바꿈돼 행마다 높이가 들쭉날쭉해져서
+                      "한눈에 훑고 바로 전화"하기 어려웠다. 1줄로 잘라 보여주고
+                      전체 이름은 title로 확인하게 한다. */}
                       <TableCell className="px-2 font-medium max-w-[130px]">
                         {match.bidderName ? (
                           <a
                             href={naverSearchHref(match.bidderName)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="hover:underline hover:text-primary break-words"
-                            title="네이버에서 전화번호 검색"
+                            className="block truncate hover:underline hover:text-primary"
+                            title={`${match.bidderName} — 네이버에서 전화번호 검색`}
                           >
                             {match.bidderName}
                           </a>
@@ -566,28 +621,54 @@ export default function Matches() {
                           "낙찰자 미확인"
                         )}
                       </TableCell>
+                      {/* 개선(2026-09-15 UX 리뷰): "규모"가 추정가격(예산)인지
+                      실제 낙찰금액인지 구분 없이 같은 자리에 표시돼, 전화영업
+                      중에 실제와 다른 금액을 말할 위험이 있었다. 어느 쪽인지
+                      작은 라벨로 밝힌다. */}
                       <TableCell className="px-2 text-muted-foreground whitespace-nowrap">
+                        {match.budgetAmount != null ? (
+                          <span className="mr-1 rounded bg-muted px-1 py-0.5 text-[10px] align-middle">예산</span>
+                        ) : match.awardAmount != null ? (
+                          <span className="mr-1 rounded bg-muted px-1 py-0.5 text-[10px] align-middle">낙찰</span>
+                        ) : null}
                         {formatAmount(match.budgetAmount ?? match.awardAmount)}
                       </TableCell>
                       {/* 요구사항(2026-09-13 사용자 요청: "낙찰받은 사람의 사무실과
                       실제 공사 현장을 모두 검색해서 결과에 보여줘"): 사업자 주소
-                      (bidderAddress)와 실제 공사현장 주소(siteAddress)를 각각 별도
-                      칼럼으로 보여준다. */}
-                      <TableCell className="px-2 text-muted-foreground max-w-[160px]">
-                        <div className="flex items-start gap-1.5">
-                          <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                          <span className="truncate" title={match.bidderAddress ?? undefined}>
-                            {match.bidderAddress ?? "주소 미확인"}
+                      (bidderAddress)와 실제 공사현장 주소(siteAddress)를 보여준다.
+                      개선(2026-09-15 UX 리뷰): 현장 주소는 실제로는 거의 항상
+                      비어있어 별도 칼럼으로 두면 폭만 차지하고(가로스크롤 재발
+                      원인), title 툴팁만으로는 터치기기에서 전체 주소를 볼 수
+                      없었다 — 하나로 합치고, 클릭하면(터치 포함) 둘 다 보여주는
+                      팝오버로 바꾼다. */}
+                      <TableCell className="px-2 text-muted-foreground max-w-[170px]">
+                        {match.bidderAddress || match.siteAddress ? (
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <button
+                                type="button"
+                                className="flex w-full items-start gap-1.5 text-left hover:text-foreground"
+                              >
+                                <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                                <span className="truncate">{match.bidderAddress ?? match.siteAddress}</span>
+                              </button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-80 space-y-2 text-xs">
+                              <div>
+                                <div className="font-medium text-foreground">사업자 주소</div>
+                                <div className="text-muted-foreground">{match.bidderAddress ?? "주소 미확인"}</div>
+                              </div>
+                              <div>
+                                <div className="font-medium text-foreground">현장 주소</div>
+                                <div className="text-muted-foreground">{match.siteAddress ?? "주소 미확인"}</div>
+                              </div>
+                            </PopoverContent>
+                          </Popover>
+                        ) : (
+                          <span className="flex items-center gap-1.5">
+                            <MapPin className="h-3.5 w-3.5 shrink-0" /> 주소 미확인
                           </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="px-2 text-muted-foreground max-w-[160px]">
-                        <div className="flex items-start gap-1.5">
-                          <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                          <span className="truncate" title={match.siteAddress ?? undefined}>
-                            {match.siteAddress ?? "주소 미확인"}
-                          </span>
-                        </div>
+                        )}
                       </TableCell>
                       <TableCell className="px-2 max-w-[150px]">
                         <div className="flex flex-wrap items-center gap-1">
@@ -700,9 +781,18 @@ export default function Matches() {
               삭제되지 않고 전부 누적 보관되며, 10건씩 페이지를 넘겨 볼 수 있습니다.
             </CardDescription>
           </div>
-          <Button size="sm" onClick={handleRunNow} disabled={triggerScan.isPending} className="shrink-0">
-            {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
-            지금 실행
+          <Button
+            size="sm"
+            onClick={handleRunNow}
+            disabled={triggerScan.isPending || justTriggered}
+            className="shrink-0"
+          >
+            {triggerScan.isPending || justTriggered ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <PlayCircle className="h-4 w-4" />
+            )}
+            {justTriggered ? "실행 중..." : "지금 실행"}
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -747,10 +837,14 @@ export default function Matches() {
                 variant="outline"
                 size="sm"
                 onClick={handleRunForRange}
-                disabled={triggerScan.isPending || rangeInvalid}
+                disabled={triggerScan.isPending || justTriggered || rangeInvalid}
               >
-                {triggerScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarSearch className="h-4 w-4" />}
-                이 기간으로 검색
+                {triggerScan.isPending || justTriggered ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CalendarSearch className="h-4 w-4" />
+                )}
+                {justTriggered ? "실행 중..." : "이 기간으로 검색"}
               </Button>
             </div>
             {rangeInvalid && startDate && endDate ? (
@@ -769,7 +863,29 @@ export default function Matches() {
                     <TableHead>상태</TableHead>
                     <TableHead>대상일</TableHead>
                     <TableHead>낙찰 건수</TableHead>
-                    <TableHead>확인 건수</TableHead>
+                    <TableHead>
+                      {/* 개선(2026-09-15 UX 리뷰): "확인 건수"가 "낙찰 건수"보다
+                      작은 경우가 흔한데(최소 공사 규모 미달 건은 상세조회 자체를
+                      건너뜀) 왜 그런지 설명이 없어 리드가 누락된 것처럼 보였다. */}
+                      <span className="inline-flex items-center gap-1">
+                        확인 건수
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type="button"
+                              className="text-muted-foreground hover:text-foreground"
+                              aria-label="확인 건수 설명 보기"
+                            >
+                              <Info className="h-3 w-3" />
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-72 text-xs text-muted-foreground">
+                            낙찰 건수보다 적을 수 있습니다. 최소 공사 규모 미달인 건은 상세 조회 자체를 건너뛰고,
+                            그 외 공공데이터포털 API 한도초과 등으로 조회하지 못한 건은 "오류" 칸에 표시됩니다.
+                          </PopoverContent>
+                        </Popover>
+                      </span>
+                    </TableHead>
                     <TableHead>매칭 건수</TableHead>
                     <TableHead>시작 시각</TableHead>
                     <TableHead>오류</TableHead>
@@ -778,7 +894,7 @@ export default function Matches() {
                 <TableBody>
                   {scans.map((scan) => (
                     <TableRow key={scan.id} className={scan.id === selectedScanRunId ? "bg-muted/50" : undefined}>
-                      <TableCell>{scanStatusBadge(scan.status)}</TableCell>
+                      <TableCell>{scanStatusBadge(scan)}</TableCell>
                       <TableCell className="text-xs">{formatTargetDates(scan.targetDates)}</TableCell>
                       <TableCell>{scan.awardsFound}</TableCell>
                       <TableCell>{scan.candidatesChecked}</TableCell>
@@ -801,7 +917,18 @@ export default function Matches() {
                         )}
                       </TableCell>
                       <TableCell className="text-xs whitespace-nowrap">{formatDateTime(scan.startedAt)}</TableCell>
-                      <TableCell className="max-w-xs text-xs text-destructive">{scan.errorMessage ?? "-"}</TableCell>
+                      <TableCell className="max-w-xs text-xs">
+                        {scan.errorMessage ? (
+                          <span className="text-destructive">{scan.errorMessage}</span>
+                        ) : scan.candidatesChecked < scan.awardsFound ? (
+                          <span className="text-muted-foreground">
+                            {scan.awardsFound - scan.candidatesChecked}건은 최소 공사 규모 미달로 상세 조회를
+                            하지 않았습니다.
+                          </span>
+                        ) : (
+                          "-"
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
