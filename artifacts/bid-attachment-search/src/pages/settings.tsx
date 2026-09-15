@@ -307,6 +307,9 @@ export default function Settings() {
   const [minBudgetAmount, setMinBudgetAmount] = useState("50000000");
   const [notificationEmails, setNotificationEmails] = useState<string[]>([]);
   const [enabledSources, setEnabledSources] = useState<string[]>(["나라장터"]);
+  const [secondaryKeywords, setSecondaryKeywords] = useState<string[]>([]);
+  const [secondaryMinAwardAmount, setSecondaryMinAwardAmount] = useState("");
+  const [secondaryMaxAwardAmount, setSecondaryMaxAwardAmount] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -319,6 +322,13 @@ export default function Settings() {
     setMinBudgetAmount(String(settingsQuery.data.minBudgetAmount));
     setNotificationEmails(settingsQuery.data.notificationEmails);
     setEnabledSources(settingsQuery.data.enabledSources);
+    setSecondaryKeywords(settingsQuery.data.secondaryKeywords);
+    setSecondaryMinAwardAmount(
+      settingsQuery.data.secondaryMinAwardAmount != null ? String(settingsQuery.data.secondaryMinAwardAmount) : "",
+    );
+    setSecondaryMaxAwardAmount(
+      settingsQuery.data.secondaryMaxAwardAmount != null ? String(settingsQuery.data.secondaryMaxAwardAmount) : "",
+    );
   }, [settingsQuery.data]);
 
   // 요구사항(설정 저장 오류 명확화, 2026-09-09): 서버까지 갔다가 400으로
@@ -344,6 +354,9 @@ export default function Settings() {
           notificationEmails,
           // SELECTABLE_SOURCES ∪ 나라장터가 서버 스키마의 enum과 동일한 값이므로 안전한 캐스팅이다.
           enabledSources: enabledSources as AppSettingsInputEnabledSourcesItem[],
+          secondaryKeywords,
+          secondaryMinAwardAmount: secondaryMinAwardAmount.trim() === "" ? null : Number(secondaryMinAwardAmount),
+          secondaryMaxAwardAmount: secondaryMaxAwardAmount.trim() === "" ? null : Number(secondaryMaxAwardAmount),
         },
       },
       { onSuccess: () => setSaved(true) },
@@ -411,6 +424,47 @@ export default function Settings() {
             required
             emptyHint="최소 1개 이상 입력해야 합니다. 비워두면 저장할 수 없습니다 (비워도 '전체 허용'이 아니라 아무 공고도 매칭되지 않기 때문입니다)."
           />
+          <div className="space-y-4 rounded-lg border p-4">
+            <TagEditor
+              label="2차 키워드 (선택 — 공고 제목 + 낙찰금액만으로 매칭)"
+              description={
+                '여기 등록한 키워드 중 하나라도 공고 제목에 있고, 아래 "낙찰금액" 범위 안이면 위 "검색 키워드"(1차)가 ' +
+                "없어도, 업무구분/추정가격/최소 공사 규모/첨부파일 존재 여부와 상관없이 곧바로 리드로 등록합니다. " +
+                "비워두면 이 조건은 사용하지 않습니다."
+              }
+              values={secondaryKeywords}
+              onChange={setSecondaryKeywords}
+              emptyHint="비어 있으면 2차 조건을 사용하지 않습니다."
+            />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="secondaryMinAwardAmount">낙찰금액 최소 (원)</Label>
+                <Input
+                  id="secondaryMinAwardAmount"
+                  type="number"
+                  min={0}
+                  placeholder="제한 없음"
+                  value={secondaryMinAwardAmount}
+                  onChange={(event) => setSecondaryMinAwardAmount(event.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="secondaryMaxAwardAmount">낙찰금액 최대 (원)</Label>
+                <Input
+                  id="secondaryMaxAwardAmount"
+                  type="number"
+                  min={0}
+                  placeholder="제한 없음"
+                  value={secondaryMaxAwardAmount}
+                  onChange={(event) => setSecondaryMaxAwardAmount(event.target.value)}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              LH는 실제 낙찰금액을 제공하지 않아, LH 공고에는 이 범위를 기초금액(예산)과 비교합니다.
+            </p>
+          </div>
+
           <TagEditor
             label="업무구분(공종) 키워드 — 공사에만 적용"
             description="공사 공고의 공종이 이 키워드 중 하나를 포함해야 검색 대상이 됩니다. 비워두면 모든 공종을 검색합니다. (물품/용역 공고에는 적용되지 않습니다)"
