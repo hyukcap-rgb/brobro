@@ -64,8 +64,13 @@ function daysInclusive(startKey: string, endKey: string): number {
 }
 
 router.post("/scans/run", async (req, res) => {
+  // 요구사항(2026-09-15 사용자 리포트: "9/1~2일로 날짜를 바꾸고 이 기간으로
+  // 검색을 누르면 대상일이 9/14일로 나와"): 실제로 클라이언트가 무엇을
+  // 보냈는지 원인 파악을 위해 요청 바디를 그대로 로그에 남긴다.
+  logger.info({ body: req.body }, "POST /scans/run 요청 바디");
   const input = TriggerScanBody.safeParse(req.body ?? {});
   if (!input.success) {
+    logger.warn({ body: req.body, issues: input.error.issues }, "POST /scans/run 바디 검증 실패");
     res.status(400).json({ error: "날짜 형식을 확인해 주세요 (YYYY-MM-DD)." });
     return;
   }
