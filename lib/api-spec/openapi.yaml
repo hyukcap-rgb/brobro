@@ -783,6 +783,20 @@ components:
           items:
             type: string
             enum: [나라장터, LH]
+        secondaryKeywords:
+          type: array
+          description: >-
+            1차 키워드(matchKeywords)와 완전히 독립된 2차 조건용 키워드. 공고
+            제목에 이 중 하나라도 있고 낙찰금액이 secondaryMinAwardAmount~
+            secondaryMaxAwardAmount 범위 안이면, 업무구분/추정가격/최소공사규모/
+            첨부파일 존재 여부와 무관하게 리드로 등록한다. 비어 있으면 이 조건을
+            쓰지 않는다.
+          items:
+            type: string
+        secondaryMinAwardAmount:
+          type: ["number", "null"]
+        secondaryMaxAwardAmount:
+          type: ["number", "null"]
         updatedAt:
           type: string
       required:
@@ -792,6 +806,7 @@ components:
         - minBudgetAmount
         - notificationEmails
         - enabledSources
+        - secondaryKeywords
         - updatedAt
     AppSettingsInput:
       type: object
@@ -829,6 +844,16 @@ components:
           items:
             type: string
             enum: [나라장터, LH]
+        secondaryKeywords:
+          type: array
+          items:
+            type: string
+        secondaryMinAwardAmount:
+          type: ["number", "null"]
+          minimum: 0
+        secondaryMaxAwardAmount:
+          type: ["number", "null"]
+          minimum: 0
     AwardedMatch:
       type: object
       properties:
