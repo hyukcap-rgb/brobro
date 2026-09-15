@@ -40,6 +40,12 @@ export async function ensureSchema(): Promise<void> {
     -- 같은 방식으로 보강한다.
     ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS notification_emails JSONB NOT NULL DEFAULT '[]'::jsonb;
 
+    -- 요구사항(2026-09-14 사용자 요청: "나라장터를 기본으로, 토지공사나 군대
+    -- 입찰싸이트도 선택하면 검색할 수 있는 싸이트로 업그레이드"): 매일 자동 검색 +
+    -- 수동 검색 모두에서 어떤 사이트를 조회할지. 기존 배포된 테이블에는 없는
+    -- 컬럼이라 다른 컬럼들과 같은 방식으로 보강한다. "나라장터"는 항상 포함.
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS enabled_sources JSONB NOT NULL DEFAULT '["나라장터"]'::jsonb;
+
     CREATE TABLE IF NOT EXISTS daily_scan_runs (
       id SERIAL PRIMARY KEY,
       target_dates JSONB NOT NULL,
@@ -100,6 +106,16 @@ export async function ensureSchema(): Promise<void> {
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS work_category TEXT;
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS contact_source TEXT;
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS estimated_amount BIGINT;
+
+    -- 요구사항(2026-09-14 사용자 요청: "나라장터를 기본으로, 토지공사나 군대
+    -- 입찰싸이트도 선택하면 검색할 수 있도록"): 이 매칭을 어느 사이트(나라장터/LH)
+    -- 에서 찾았는지. 기존 배포된 테이블에는 없는 컬럼이라 다른 컬럼들과 같은
+    -- 방식으로 보강한다. source가 다르면 같은 공고번호라도 별개의 리드이므로,
+    -- 유니크 인덱스도 source를 포함하도록 다시 만든다(구 인덱스는 제거).
+    ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '나라장터';
+    DROP INDEX IF EXISTS awarded_matches_unique_hit;
+    CREATE UNIQUE INDEX IF NOT EXISTS awarded_matches_unique_hit
+      ON awarded_matches (source, notice_number, matched_keyword, attachment_file_name);
 
     -- 첨부파일 5개월 보관/자동삭제(attachment-cleanup.ts). 채워지면 디스크 파일은
     -- 이미 삭제된 상태이고 리드 레코드 자체는 남아있음을 뜻한다.
