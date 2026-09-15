@@ -20,6 +20,8 @@ const SETTINGS_FIELD_ERROR_MESSAGES: Record<string, string> = {
   maxEstimatedPrice: "추정가격 최대값을 확인해 주세요 (0 이상의 숫자).",
   minBudgetAmount: "최소 공사 규모 값을 확인해 주세요 (0 이상의 숫자).",
   notificationEmails: "이메일 주소 형식을 확인해 주세요.",
+  secondaryMinAwardAmount: "2차 조건 낙찰금액 최소값을 확인해 주세요 (0 이상의 숫자).",
+  secondaryMaxAwardAmount: "2차 조건 낙찰금액 최대값을 확인해 주세요 (0 이상의 숫자).",
 };
 
 // 요구사항(2026-09-12 사용자 요청: 매일 검색 결과 자동 이메일 발송): 오타로 잘못된
