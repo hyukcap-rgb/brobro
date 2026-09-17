@@ -132,6 +132,12 @@ export async function sendTestEmail(to: string): Promise<void> {
   }
 }
 
+// 요구사항(2026-09-16 사용자 요청: "메일을 받으니 함께받는 사람들 목록이 다
+// 나오네. 각자 메일을 보내서 받는사람이 누구인지 모르게 해줘"): 예전에는
+// 모든 수신 주소를 한 통의 메일 To 칸에 콤마로 나열해서 보냈기 때문에, 받는
+// 사람 각자가 다른 수신자 주소를 전부 볼 수 있었다. 이제는 수신자마다 메일을
+// 따로(1건씩) 보내 To 칸에 본인 주소만 보이도록 한다. 한 명에게 보내다 실패해도
+// 나머지 수신자에게는 계속 보낸다.
 export async function sendScanResultEmail(params: ScanResultEmailParams): Promise<void> {
   if (params.to.length === 0 || params.matches.length === 0) return;
   const transporter = getTransporter();
@@ -142,16 +148,19 @@ export async function sendScanResultEmail(params: ScanResultEmailParams): Promis
     return;
   }
   const subject = `나라장터 검색결과_${params.dateLabel}일_${params.matches.length}건`;
-  try {
-    await transporter.sendMail({
-      from: MAIL_USER,
-      to: params.to.join(", "),
-      subject,
-      html: buildHtml(params),
-      attachments: params.attachments,
-    });
-    logger.info({ to: params.to, matches: params.matches.length }, "일일 검색결과 메일 발송 완료");
-  } catch (error) {
-    logger.error({ err: error }, "일일 검색결과 메일 발송 실패");
+  const html = buildHtml(params);
+  for (const recipient of params.to) {
+    try {
+      await transporter.sendMail({
+        from: MAIL_USER,
+        to: recipient,
+        subject,
+        html,
+        attachments: params.attachments,
+      });
+      logger.info({ to: recipient, matches: params.matches.length }, "일일 검색결과 메일 발송 완료");
+    } catch (error) {
+      logger.error({ err: error, to: recipient }, "일일 검색결과 메일 발송 실패");
+    }
   }
 }
