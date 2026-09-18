@@ -686,9 +686,14 @@ export default function Matches() {
                       비어있어 별도 칼럼으로 두면 폭만 차지하고(가로스크롤 재발
                       원인), title 툴팁만으로는 터치기기에서 전체 주소를 볼 수
                       없었다 — 하나로 합치고, 클릭하면(터치 포함) 둘 다 보여주는
-                      팝오버로 바꾼다. */}
+                      팝오버로 바꾼다. 재조정(2026-09-18 사용자 요청: "주소는
+                      현장주소를 1번으로 하고 클릭하면 사업자 주소가 나오게
+                      해줘. 현장주소가 가장 중요해"): 영업 대상은 실제 공사가
+                      진행되는 현장이므로, 기본으로 보이는 값과 팝오버 첫 줄을
+                      현장 주소 우선으로 바꾸고, 사업자 주소는 그 아래 보조
+                      정보로 내린다. */}
                       <TableCell className="px-2 text-muted-foreground">
-                        {match.bidderAddress || match.siteAddress ? (
+                        {match.siteAddress || match.bidderAddress ? (
                           <Popover>
                             <PopoverTrigger asChild>
                               <button
@@ -696,17 +701,17 @@ export default function Matches() {
                                 className="flex w-full min-w-0 items-start gap-1.5 text-left hover:text-foreground"
                               >
                                 <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                                <span className="min-w-0 truncate">{match.bidderAddress ?? match.siteAddress}</span>
+                                <span className="min-w-0 truncate">{match.siteAddress ?? match.bidderAddress}</span>
                               </button>
                             </PopoverTrigger>
                             <PopoverContent className="w-80 space-y-2 text-xs">
                               <div>
-                                <div className="font-medium text-foreground">사업자 주소</div>
-                                <div className="text-muted-foreground">{match.bidderAddress ?? "주소 미확인"}</div>
-                              </div>
-                              <div>
                                 <div className="font-medium text-foreground">현장 주소</div>
                                 <div className="text-muted-foreground">{match.siteAddress ?? "주소 미확인"}</div>
+                              </div>
+                              <div>
+                                <div className="font-medium text-foreground">사업자 주소</div>
+                                <div className="text-muted-foreground">{match.bidderAddress ?? "주소 미확인"}</div>
                               </div>
                             </PopoverContent>
                           </Popover>
