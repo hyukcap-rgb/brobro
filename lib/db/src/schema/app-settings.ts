@@ -1,11 +1,20 @@
-import { bigint, jsonb, pgTable, smallint, timestamp } from "drizzle-orm/pg-core";
+import { bigint, integer, jsonb, pgTable, smallint, timestamp } from "drizzle-orm/pg-core";
+import { adminUsersTable } from "./admin-users";
 
-// Single-row configuration table (id is always 1). Holds the admin-tunable
-// criteria for the daily 낙찰 공고 scan: which document keywords count as a
-// match (default 부직포 and its variants), which 공종/업무 keywords qualify a
-// notice, and the minimum construction budget to bother scanning.
+// 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id 야.
+// msjbro에는 admin 의 모든 정보를 공유하지않아. 독립적인 id 로 작동되는거야.
+// 두 아이디로 입력은 서로 영향을 미치지 않아"): 예전에는 이 테이블이 id가
+// 항상 1인 단일 행(전체 시스템에 공용 설정 하나)이었다 — 어떤 관리자로
+// 로그인하든 같은 설정을 보고 같은 설정을 바꿨다. 이제는 관리자 계정마다
+// 독립된 설정 행을 갖도록 adminUserId를 추가한다(계정당 정확히 한 행 —
+// migrate.ts의 app_settings_admin_user_id_idx 유니크 인덱스로 강제).
+// id 컬럼은 그대로 두되(과거 행과의 하위 호환), 더 이상 "항상 1"이 아니라
+// 계정마다 새 행이 생기므로 자동 증가하도록 migrate.ts에서 시퀀스를 건다.
 export const appSettingsTable = pgTable("app_settings", {
   id: smallint("id").primaryKey().default(1),
+  adminUserId: integer("admin_user_id")
+    .notNull()
+    .references(() => adminUsersTable.id, { onDelete: "cascade" }),
   matchKeywords: jsonb("match_keywords").$type<string[]>().notNull(),
   workTypeKeywords: jsonb("work_type_keywords").$type<string[]>().notNull(),
   // 업무구분(물품/일반용역/기술용역/공사) - 나라장터 API가 실제로 지원하는 값만.
