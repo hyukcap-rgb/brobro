@@ -202,12 +202,45 @@ function excelColumn(index: number): string {
   return result;
 }
 
-export async function buildMatchesXlsx(matches: AwardedMatch[]): Promise<string> {
-  const rows = [MATCH_HEADERS, ...matches.map(matchRow)];
-  const workbookDir = await mkdtemp(path.join(tmpdir(), "matches-xlsx-"));
-  await mkdir(path.join(workbookDir, "_rels"), { recursive: true });
-  await mkdir(path.join(workbookDir, "xl", "_rels"), { recursive: true });
-  await mkdir(path.join(workbookDir, "xl", "worksheets"), { recursive: true });
+// 요구사항(2026-09-18 사용자 요청: "결과값을 2개의 시트로 나눠서 엑셀을 받을
+// 수 있도록 해줘 - 1.지금처럼 결과값이 나오는 시트 2.결과값이 나온 시트 중
+// 키워드2 와 키워드1 중 공내역서 첨부파일이 없는 공고"): 매칭된 리드는 항상
+// 1차 키워드(matchKeywords) 아니면 2차 키워드("사용자지정") 둘 중 하나로
+// 잡히므로, "1차/2차 키워드 중"은 곧 1번 시트 전체를 뜻한다. 그중 매칭된
+// 첨부파일명 어디에도 "내역서"라는 글자가 없는 공고만 2번째 시트로 추린다
+// (AskUserQuestion으로 확인: 파일명에 "내역서" 포함 여부로 판단, 같은 공고가
+// 여러 매칭 행으로 나오면 공고 하나당 대표 행 하나만).
+const BILL_OF_QUANTITIES_MARKER = "내역서";
+
+function hasBillOfQuantitiesAttachment(matchesForNotice: AwardedMatch[]): boolean {
+  return matchesForNotice.some((match) => (match.attachmentFileName ?? "").includes(BILL_OF_QUANTITIES_MARKER));
+}
+
+// matches는 listAwardedMatches에서 이미 최신순(desc createdAt)으로 넘어오므로,
+// 같은 공고(=같은 source+noticeNumber)의 첫 등장이 가장 최근 매칭이다 — 그걸
+// 대표 행으로 남긴다.
+function selectMatchesWithoutBillOfQuantities(matches: AwardedMatch[]): AwardedMatch[] {
+  const groups = new Map<string, AwardedMatch[]>();
+  for (const match of matches) {
+    const key = `${match.source}::${match.noticeNumber}`;
+    const group = groups.get(key);
+    if (group) group.push(match);
+    else groups.set(key, [match]);
+  }
+  const result: AwardedMatch[] = [];
+  const seen = new Set<string>();
+  for (const match of matches) {
+    const key = `${match.source}::${match.noticeNumber}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!hasBillOfQuantitiesAttachment(groups.get(key)!)) {
+      result.push(match);
+    }
+  }
+  return result;
+}
+
+function buildSheetXml(rows: string[][]): string {
   const sheetRows = rows
     .map((row, rowIndex) => {
       const cells = row
@@ -219,9 +252,19 @@ export async function buildMatchesXlsx(matches: AwardedMatch[]): Promise<string>
       return `<row r="${rowIndex + 1}">${cells}</row>`;
     })
     .join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetRows}</sheetData></worksheet>`;
+}
+
+export async function buildMatchesXlsx(matches: AwardedMatch[]): Promise<string> {
+  const sheet1Rows = [MATCH_HEADERS, ...matches.map(matchRow)];
+  const sheet2Rows = [MATCH_HEADERS, ...selectMatchesWithoutBillOfQuantities(matches).map(matchRow)];
+  const workbookDir = await mkdtemp(path.join(tmpdir(), "matches-xlsx-"));
+  await mkdir(path.join(workbookDir, "_rels"), { recursive: true });
+  await mkdir(path.join(workbookDir, "xl", "_rels"), { recursive: true });
+  await mkdir(path.join(workbookDir, "xl", "worksheets"), { recursive: true });
   await writeFile(
     path.join(workbookDir, "[Content_Types].xml"),
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`,
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`,
   );
   await writeFile(
     path.join(workbookDir, "_rels", ".rels"),
@@ -229,16 +272,14 @@ export async function buildMatchesXlsx(matches: AwardedMatch[]): Promise<string>
   );
   await writeFile(
     path.join(workbookDir, "xl", "workbook.xml"),
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="누적결과" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="누적결과" sheetId="1" r:id="rId1"/><sheet name="내역서 없는 공고" sheetId="2" r:id="rId2"/></sheets></workbook>`,
   );
   await writeFile(
     path.join(workbookDir, "xl", "_rels", "workbook.xml.rels"),
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>`,
   );
-  await writeFile(
-    path.join(workbookDir, "xl", "worksheets", "sheet1.xml"),
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetRows}</sheetData></worksheet>`,
-  );
+  await writeFile(path.join(workbookDir, "xl", "worksheets", "sheet1.xml"), buildSheetXml(sheet1Rows));
+  await writeFile(path.join(workbookDir, "xl", "worksheets", "sheet2.xml"), buildSheetXml(sheet2Rows));
   const output = path.join(workbookDir, "..", `누적_낙찰검색결과_${Date.now()}.xlsx`);
   await command("zip", ["-qr", output, "."], workbookDir);
   await rm(workbookDir, { recursive: true, force: true });
