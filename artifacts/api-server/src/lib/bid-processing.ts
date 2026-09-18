@@ -738,6 +738,11 @@ export interface ExtractedSegment {
   sheet: string | null;
   page: number | null;
   location: string;
+  // 요구사항(2026-09-18 사용자 요청: "관급자재 에 키워드가 있는경우 검색하지
+  // 않아도 됨 ... 이건 우리가 영업을 하지 못해"): 이 항목이 "관급자재"(발주기관이
+  // 직접 공급 — 영업 대상 아님) 또는 "사급자재"(시공사가 직접 구매 — 영업 대상)
+  // 구분 아래에 있는지. tagMaterialSections()가 문서 순서를 따라가며 채운다.
+  section?: "관급자재" | "사급자재" | null;
 }
 
 interface AttemptResult<T> {
@@ -1810,7 +1815,36 @@ async function extractHwp5(filePath: string): Promise<ExtractedSegment[]> {
   }
 }
 
-export async function extractSegments(filePath: string): Promise<ExtractedSegment[]> {
+// 요구사항(2026-09-18 사용자 요청: "관급자제 에 키워드가 있는경우 검색하지
+// 않아도 됨. 키워드가 관급자제 아래 검색하려는 키워드가 있는경우 삭제
+// 해줘.이건 우리가 영업을 하지 못해"): 내역서(엑셀 행, PDF/HWP/DOCX 표나 문단)는
+// 보통 "관급자재"/"사급자재" 같은 구분 행(또는 그 줄만 단독으로 있는 라벨)이
+// 나오고 그 아래로 여러 항목이 이어지는 구조다. extractXxx가 만드는 segments는
+// 항상 문서에 나온 순서 그대로이므로(엑셀은 시트 안에서 행 순서, PDF/HWP/DOCX는
+// 문단/줄 순서), 그 순서를 따라가며 "지금 어느 구분 아래인지"를 갱신하면 별도
+// 포맷별 파싱 없이도 전체 포맷에 동일하게 적용할 수 있다. 시트가 바뀌면(새
+// 내역서/새 표) 상태를 초기화한다.
+function tagMaterialSections(segments: ExtractedSegment[]): void {
+  let current: "관급자재" | "사급자재" | null = null;
+  let currentSheet: string | null | undefined;
+  let sheetSeen = false;
+  for (const segment of segments) {
+    if (!sheetSeen || segment.sheet !== currentSheet) {
+      current = null;
+      currentSheet = segment.sheet;
+      sheetSeen = true;
+    }
+    const label = segment.text.trim().replace(/[:：]\s*$/, "");
+    if (label === "관급자재" || label === "관급") {
+      current = "관급자재";
+    } else if (label === "사급자재" || label === "사급") {
+      current = "사급자재";
+    }
+    segment.section = current;
+  }
+}
+
+async function extractSegmentsImpl(filePath: string): Promise<ExtractedSegment[]> {
   const extension = path.extname(filePath).toLowerCase();
   // 컨테이너 종류를 먼저 보고, 확장자는 같은 컨테이너 안에서 포맷을 고르는
   // 용도로만 쓴다 (sniffContainer 주석 참고).
@@ -1852,6 +1886,12 @@ export async function extractSegments(filePath: string): Promise<ExtractedSegmen
   return [];
 }
 
+export async function extractSegments(filePath: string): Promise<ExtractedSegment[]> {
+  const segments = await extractSegmentsImpl(filePath);
+  tagMaterialSections(segments);
+  return segments;
+}
+
 export function searchSegments(segments: ExtractedSegment[], keywords: readonly string[]): {
   keywordFound: boolean;
   foundKeywords: string[];
@@ -1860,6 +1900,7 @@ export function searchSegments(segments: ExtractedSegment[], keywords: readonly 
   location: string;
   surroundingText: string;
   originalText: string;
+  section: "관급자재" | "사급자재" | null;
 }[] {
   const matches: ReturnType<typeof searchSegments> = [];
   for (const segment of segments) {
@@ -1879,6 +1920,7 @@ export function searchSegments(segments: ExtractedSegment[], keywords: readonly 
         firstIndex + 500,
       ),
       originalText: segment.itemContext ?? segment.text,
+      section: segment.section ?? null,
     });
   }
   return matches;
