@@ -3,7 +3,7 @@ import path from "node:path";
 import { createReadStream } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Response } from "express";
-import { count, desc, eq } from "drizzle-orm";
+import { count, desc, eq, inArray } from "drizzle-orm";
 import { db, awardedMatchesTable, dailyScanRunsTable, type AwardedMatch, type DailyScanRun } from "@workspace/db";
 import { command } from "./bid-processing";
 
@@ -73,6 +73,43 @@ export async function deleteAllScanData(): Promise<{ deletedMatches: number; del
   const deletedMatches = await db.delete(awardedMatchesTable).returning({ id: awardedMatchesTable.id });
   const deletedRuns = await db.delete(dailyScanRunsTable).returning({ id: dailyScanRunsTable.id });
   return { deletedMatches: deletedMatches.length, deletedRuns: deletedRuns.length };
+}
+
+// 요구사항(2026-09-18 사용자 지적: "조건2번째로 검색된 이곳에서 같은곳이
+// 3개야. 같은곳이 없도록 해야지"): daily-scan.ts의 버그로, "사용자지정"(2차
+// 키워드) 매칭은 예전에 공고 하나당 첨부파일 개수만큼 행을 만들어 화면에
+// 같은 공고가 여러 번 중복으로 나왔다(버그 자체는 daily-scan.ts에서 이미
+// 수정했지만, 이미 저장된 과거 데이터는 소급 갱신되지 않는다). 같은
+// (source, noticeNumber) 조합의 "사용자지정" 행이 여러 개면 가장 먼저 저장된
+// 것(id가 가장 작은 것) 하나만 남기고 나머지는 지운다. 관리자가 필요할 때
+// 직접 호출하는 일회성 정리용이라 화면 버튼은 만들지 않는다.
+export async function dedupeSecondaryMatches(): Promise<{ deletedCount: number }> {
+  const rows = await db
+    .select({
+      id: awardedMatchesTable.id,
+      source: awardedMatchesTable.source,
+      noticeNumber: awardedMatchesTable.noticeNumber,
+    })
+    .from(awardedMatchesTable)
+    .where(eq(awardedMatchesTable.matchedKeyword, "사용자지정"))
+    .orderBy(awardedMatchesTable.id);
+
+  const seen = new Set<string>();
+  const idsToDelete: number[] = [];
+  for (const row of rows) {
+    const key = `${row.source}::${row.noticeNumber}`;
+    if (seen.has(key)) {
+      idsToDelete.push(row.id);
+    } else {
+      seen.add(key);
+    }
+  }
+  if (idsToDelete.length === 0) return { deletedCount: 0 };
+  const deleted = await db
+    .delete(awardedMatchesTable)
+    .where(inArray(awardedMatchesTable.id, idsToDelete))
+    .returning({ id: awardedMatchesTable.id });
+  return { deletedCount: deleted.length };
 }
 
 const MATCH_HEADERS = [
