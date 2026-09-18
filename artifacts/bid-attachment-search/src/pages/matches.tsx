@@ -429,7 +429,11 @@ export default function Matches() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl p-6 space-y-6">
+    // 요구사항(2026-09-18 사용자 요청: "조금더 크게 해줘도 될꺼같아. 15인치
+    // 노트북인데 이 화면에서도 이렇게 나오는거니까"): max-w-7xl(1280px)이
+    // 15인치 노트북 화면에서도 좌우에 여백을 크게 남겼다. 검색 결과 표
+    // 자체 폭(1535px) + 좌우 패딩을 편하게 담을 수 있도록 1680px로 넓힌다.
+    <div className="mx-auto max-w-[1680px] p-6 space-y-6">
       <Card ref={matchesCardRef}>
         <CardHeader className="flex flex-row items-start justify-between gap-4">
           <div>
