@@ -1,9 +1,16 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
 
-const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
-  ({ className, ...props }, ref) => (
-    <div className="relative w-full overflow-auto">
+// containerClassName: 표를 감싸는 스크롤 컨테이너(실제로 overflow-auto가
+// 걸려 스크롤이 발생하는 div)에 추가로 줄 클래스. 예: 고정 높이를 줘서
+// 세로/가로 스크롤이 표 바로 안에서 생기게 하고 싶을 때 사용한다(2026-09-18
+// 사용자 요청: "검색결과 스크롤 생기게 하자" 참고 — matches.tsx).
+const Table = React.forwardRef<
+  HTMLTableElement,
+  React.HTMLAttributes<HTMLTableElement> & { containerClassName?: string }
+>(
+  ({ className, containerClassName, ...props }, ref) => (
+    <div className={cn("relative w-full overflow-auto", containerClassName)}>
       <table
         ref={ref}
         className={cn("w-full caption-bottom text-sm", className)}
