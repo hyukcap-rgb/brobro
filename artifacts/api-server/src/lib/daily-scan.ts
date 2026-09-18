@@ -1,7 +1,7 @@
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { copyFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db, dailyScanRunsTable, awardedMatchesTable, noticeDetailCacheTable, type DailyScanRun, type InsertAwardedMatch } from "@workspace/db";
 import {
   requestBuffer,
@@ -186,11 +186,15 @@ function kstDateFromKey(key: string): KstDate {
 // 인해 나중 실행이 더 과거 날짜를 대상으로 할 수도 있어(예: 장애 복구 후 밀린
 // 날짜를 뒤늦게 채우는 경우) startedAt 순서와 targetDates 순서가 항상 같지는
 // 않으므로, 최근 실행 여러 건을 모아 그 안에서 최대값을 구한다.
-async function getMostRecentCoveredDateKey(): Promise<string | null> {
+// 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
+// 야... 두 아이디로 입력은 서로 영향을 미치지 않아"): 갭필 기준일도 계정별로
+// 독립적으로 계산한다 — admin의 스캔 이력이 msjbro의 "얼마나 채웠는지" 판단에
+// 섞여 들어가면 안 된다(계정마다 스캔 시작 시점·이력이 다를 수 있다).
+async function getMostRecentCoveredDateKey(adminUserId: number): Promise<string | null> {
   const recentCompleted = await db
     .select({ targetDates: dailyScanRunsTable.targetDates })
     .from(dailyScanRunsTable)
-    .where(eq(dailyScanRunsTable.status, "completed"))
+    .where(and(eq(dailyScanRunsTable.status, "completed"), eq(dailyScanRunsTable.adminUserId, adminUserId)))
     .orderBy(desc(dailyScanRunsTable.startedAt))
     .limit(30);
   let maxKey: string | null = null;
@@ -218,10 +222,13 @@ async function getMostRecentCoveredDateKey(): Promise<string | null> {
 // "낙찰일"이고(executeScanRun의 AWARD_DATE_LOOKBACK_DAYS 참고), 매일 그 날의
 // 낙찰일을 찾을 때 개찰일 기준 최대 14일을 되짚어 확인하므로 이 문제가 이미
 // 해결된다 — 별도의 재확인 로직이 더 이상 필요 없다.
-export async function computeTargetDatesWithGapFill(instant: Date = new Date()): Promise<KstDate[]> {
+export async function computeTargetDatesWithGapFill(
+  adminUserId: number,
+  instant: Date = new Date(),
+): Promise<KstDate[]> {
   const today = kstToday(instant);
   const yesterday = shiftKstDate(today, -1);
-  const lastCoveredKey = await getMostRecentCoveredDateKey();
+  const lastCoveredKey = await getMostRecentCoveredDateKey(adminUserId);
 
   if (!lastCoveredKey) {
     // 완료된 실행 기록이 아직 없다(최초 실행). 기존 로직 그대로.
@@ -569,23 +576,29 @@ function buildDateRange(startKey: string, endKey: string): KstDate[] {
 // 있도록). 실제 스캔은 executeScanRun에서 진행되며 몇 분씩 걸릴 수 있다.
 export async function createPendingScanRun(
   triggerType: "schedule" | "manual",
+  adminUserId: number,
   explicitDateRange?: { start: string; end: string },
 ): Promise<DailyScanRun> {
   const targetDates = explicitDateRange
     ? buildDateRange(explicitDateRange.start, explicitDateRange.end)
-    : await computeTargetDatesWithGapFill(); // 요구사항: 기간 지정 시 갭필 없이 그 구간만 검색, 생략 시 기존 자동 로직(전일 기준+미완료 구간 자동 보충) 사용
+    : await computeTargetDatesWithGapFill(adminUserId); // 요구사항: 기간 지정 시 갭필 없이 그 구간만 검색, 생략 시 기존 자동 로직(전일 기준+미완료 구간 자동 보충) 사용
   // 요구사항(2026-09-15 사용자 리포트: "대상일이 엉뚱하게 나와"): 실제로 이번
   // 실행이 명시적 기간 요청이었는지, 갭필 자동 로직으로 빠졌는지, 그 결과
   // targetDates가 무엇으로 계산됐는지를 남겨 원인을 바로 확인할 수 있게 한다.
   logger.info(
-    { triggerType, explicitDateRange, targetDates: targetDates.map((d) => d.key) },
+    { triggerType, adminUserId, explicitDateRange, targetDates: targetDates.map((d) => d.key) },
     "createPendingScanRun: 대상 날짜 계산 결과",
   );
   let run: DailyScanRun | undefined;
   try {
+    // 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
+    // 야... 두 아이디로 입력은 서로 영향을 미치지 않아"): 이 실행이 어느
+    // 계정의 설정으로 도는지, 결과가 어느 계정 소유가 될지를 여기서 못박는다.
+    // 동시실행 방지 유니크 인덱스도 이제 (admin_user_id, status='running')
+    // 기준이라(migrate.ts 참고), 같은 계정 안에서만 중복 실행을 막는다.
     [run] = await db
       .insert(dailyScanRunsTable)
-      .values({ targetDates: targetDates.map((d) => d.key), status: "running", triggerType })
+      .values({ adminUserId, targetDates: targetDates.map((d) => d.key), status: "running", triggerType })
       .returning();
   } catch (error) {
     if (isUniqueViolation(error)) {
@@ -608,7 +621,11 @@ export async function createPendingScanRun(
 // 전부 이 하나의 로직(executeScanRun)을 공유하므로 기준이 항상 낙찰일로
 // 통일된다 — 더 이상 흐름별로 구분할 필요가 없다.
 export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
-  const settings = await getAppSettings();
+  // 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
+  // 야... 두 아이디로 입력은 서로 영향을 미치지 않아"): 이 실행이 어느 계정
+  // 소유인지는 run.adminUserId(createPendingScanRun에서 이미 못박음)로 정해져
+  // 있으므로, 그 계정의 설정만 읽는다.
+  const settings = await getAppSettings(run.adminUserId);
   const targetDateKeys = run.targetDates;
   const targetDateSet = new Set(targetDateKeys);
   const minTargetKey = targetDateKeys.reduce(
@@ -974,6 +991,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                 // 쌓아둔다.
                 pendingInserts.push({
                   values: {
+                    adminUserId: run.adminUserId,
                     scanRunId: run.id,
                     noticeNumber,
                     noticeName: String(detail.bidNtceNm ?? "").trim() || null,
@@ -1112,6 +1130,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               const secondaryBudgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0) || null;
               const secondaryEstimatedAmount = Number(detail.presmptPrce ?? 0) || null;
               const baseValues = {
+                adminUserId: run.adminUserId,
                 scanRunId: run.id,
                 noticeNumber,
                 noticeName: String(detail.bidNtceNm ?? "").trim() || null,
@@ -1276,6 +1295,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               const inserted = await db
                 .insert(awardedMatchesTable)
                 .values({
+                  adminUserId: run.adminUserId,
                   scanRunId: run.id,
                   source: "LH",
                   noticeNumber,
@@ -1322,6 +1342,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                   const inserted = await db
                     .insert(awardedMatchesTable)
                     .values({
+                      adminUserId: run.adminUserId,
                       scanRunId: run.id,
                       source: "LH",
                       noticeNumber: secondaryNoticeNumber,
@@ -1394,8 +1415,11 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
 // cron scheduler). The manual-trigger HTTP endpoint instead calls
 // createPendingScanRun + executeScanRun separately so it can respond 202
 // immediately while the scan keeps running in the background.
-export async function runDailyScan(triggerType: "schedule" | "manual" = "schedule"): Promise<DailyScanRun> {
-  const run = await createPendingScanRun(triggerType);
+export async function runDailyScan(
+  adminUserId: number,
+  triggerType: "schedule" | "manual" = "schedule",
+): Promise<DailyScanRun> {
+  const run = await createPendingScanRun(triggerType, adminUserId);
   const completed = await executeScanRun(run);
   // 요구사항(2026-09-12 사용자 요청: "오전에 검색이 완료되면 자동으로
   // 보내지도록 해주고"): 매일 07시 자동 스캔(schedule)에서만 메일을 보낸다.
@@ -1426,7 +1450,7 @@ function formatDateLabel(dateKeys: string[]): string {
 async function sendScheduleResultEmailIfNeeded(run: DailyScanRun): Promise<void> {
   try {
     if (run.status !== "completed" || run.matchesFound <= 0) return;
-    const settings = await getAppSettings();
+    const settings = await getAppSettings(run.adminUserId);
     if (settings.notificationEmails.length === 0) return;
     const matches = await listAwardedMatchesForRun(run.id);
     if (matches.length === 0) return;
