@@ -506,12 +506,22 @@ export default function Matches() {
               행까지 스크롤해야만 보였다. Table에 고정 높이(max-h)를 직접
               주고 헤더를 sticky로 고정해, 표 자체가 스크롤 박스가 되어
               스크롤바가 항상 바로 보이고 잡히게 한다. */}
+              {/* 요구사항(2026-09-18 사용자 요청: "스크롤만 생기고 사이즈
+              최적화는 안되어 있잖아. 제목이 너무 길면 뒤에는 줄여주고
+              전체적으로 보기 편하도록 사이즈 정리좀 해줘"): 기존엔
+              table-layout:auto라 브라우저가 컬럼 폭을 내용에 따라 그때그때
+              계산했다 — 그 결과 "연락처"처럼 내용이 짧은 컬럼은 수십 px로
+              찌그러들어(예: 47px) 텍스트가 "연락" / "처 미" / "확인"처럼
+              글자 단위로 쪼개져 보이는 등 컬럼마다 크기가 들쭉날쭉하고
+              지저분했다. table-fixed로 바꾸고 각 컬럼에 고정 폭을 직접
+              지정해, 컬럼 폭이 항상 예측 가능하고 정돈되게 하며 — 각 셀은
+              그 고정 폭 안에서 truncate(말줄임표)로 잘리게 한다. */}
               <div className="rounded-md border">
-                <Table className="text-xs" containerClassName="max-h-[65vh]">
+                <Table className="text-xs table-fixed" containerClassName="max-h-[65vh]">
                   <TableHeader className="sticky top-0 z-10 bg-background shadow-[0_1px_0_0_hsl(var(--border))]">
                     <TableRow>
-                      <TableHead className="px-2">공고번호</TableHead>
-                      <TableHead className="px-2">
+                      <TableHead className="px-2 w-[140px]">공고번호</TableHead>
+                      <TableHead className="px-2 w-[85px]">
                         <button
                           type="button"
                           onClick={() => toggleSort("awardDate")}
@@ -523,9 +533,9 @@ export default function Matches() {
                       {/* 요구사항(2026-09-18 사용자 요청: "검색 결과에 공사제목을
                       보여줘. 낙찰일 다음에 낙찰제목을 넣어줘"): 공고명(=공사제목/
                       낙찰제목)을 낙찰일 바로 다음 컬럼에 보여준다. */}
-                      <TableHead className="px-2">공사제목</TableHead>
-                      <TableHead className="px-2">키워드 · 수량</TableHead>
-                      <TableHead className="px-2">
+                      <TableHead className="px-2 w-[200px]">공사제목</TableHead>
+                      <TableHead className="px-2 w-[110px]">키워드 · 수량</TableHead>
+                      <TableHead className="px-2 w-[110px]">
                         <button
                           type="button"
                           onClick={() => toggleSort("bidderName")}
@@ -534,7 +544,7 @@ export default function Matches() {
                           낙찰자 {sortIndicator("bidderName")}
                         </button>
                       </TableHead>
-                      <TableHead className="px-2">
+                      <TableHead className="px-2 w-[140px]">
                         <button
                           type="button"
                           onClick={() => toggleSort("budgetAmount")}
@@ -548,9 +558,9 @@ export default function Matches() {
                       실제 공사현장 주소를 둘 다 보여준다 — 다만 현장 주소가
                       제공되지 않는 경우가 대부분이라(2026-09-15 UX 리뷰), 별도
                       컬럼 대신 클릭하면 둘 다 보여주는 팝오버 하나로 합친다. */}
-                      <TableHead className="px-2">주소</TableHead>
-                      <TableHead className="px-2">연락처</TableHead>
-                      <TableHead className="px-2">첨부파일</TableHead>
+                      <TableHead className="px-2 w-[130px]">주소</TableHead>
+                      <TableHead className="px-2 w-[120px]">연락처</TableHead>
+                      <TableHead className="px-2 w-[130px]">첨부파일</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -598,7 +608,7 @@ export default function Matches() {
                         </div>
                       </TableCell>
                       <TableCell className="px-2 whitespace-nowrap">{match.awardDate ?? "-"}</TableCell>
-                      <TableCell className="px-2 max-w-[220px]">
+                      <TableCell className="px-2">
                         {match.noticeName ? (
                           <span className="block truncate" title={match.noticeName}>
                             {match.noticeName}
@@ -612,12 +622,12 @@ export default function Matches() {
                       한눈에 보고 해당 업체에 연락을 하려는게 이 싸이트의
                       핵심이야"): 어떤 자재가 얼마나 필요한지를 가장 먼저
                       눈에 띄게 보여준다. */}
-                      <TableCell className="px-2 max-w-[160px]">
+                      <TableCell className="px-2">
                         {match.matchedKeyword ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-xs font-semibold text-primary whitespace-normal break-words">
+                          <span className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-xs font-semibold text-primary whitespace-normal">
                             <Package className="h-3.5 w-3.5 shrink-0" />
-                            <span>{match.matchedKeyword}</span>
-                            {match.quantityText ? <span>· {match.quantityText}</span> : null}
+                            <span className="min-w-0 truncate">{match.matchedKeyword}</span>
+                            {match.quantityText ? <span className="shrink-0">· {match.quantityText}</span> : null}
                           </span>
                         ) : (
                           "-"
@@ -627,7 +637,7 @@ export default function Matches() {
                       상호명이 3~4줄로 줄바꿈돼 행마다 높이가 들쭉날쭉해져서
                       "한눈에 훑고 바로 전화"하기 어려웠다. 1줄로 잘라 보여주고
                       전체 이름은 title로 확인하게 한다. */}
-                      <TableCell className="px-2 font-medium max-w-[130px]">
+                      <TableCell className="px-2 font-medium">
                         {match.bidderName ? (
                           <a
                             href={naverSearchHref(match.bidderName)}
@@ -646,13 +656,15 @@ export default function Matches() {
                       실제 낙찰금액인지 구분 없이 같은 자리에 표시돼, 전화영업
                       중에 실제와 다른 금액을 말할 위험이 있었다. 어느 쪽인지
                       작은 라벨로 밝힌다. */}
-                      <TableCell className="px-2 text-muted-foreground whitespace-nowrap">
-                        {match.budgetAmount != null ? (
-                          <span className="mr-1 rounded bg-muted px-1 py-0.5 text-[10px] align-middle">예산</span>
-                        ) : match.awardAmount != null ? (
-                          <span className="mr-1 rounded bg-muted px-1 py-0.5 text-[10px] align-middle">낙찰</span>
-                        ) : null}
-                        {formatAmount(match.budgetAmount ?? match.awardAmount)}
+                      <TableCell className="px-2 text-muted-foreground">
+                        <div className="flex items-center gap-1">
+                          {match.budgetAmount != null ? (
+                            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px]">예산</span>
+                          ) : match.awardAmount != null ? (
+                            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px]">낙찰</span>
+                          ) : null}
+                          <span className="min-w-0 truncate">{formatAmount(match.budgetAmount ?? match.awardAmount)}</span>
+                        </div>
                       </TableCell>
                       {/* 요구사항(2026-09-13 사용자 요청: "낙찰받은 사람의 사무실과
                       실제 공사 현장을 모두 검색해서 결과에 보여줘"): 사업자 주소
@@ -662,16 +674,16 @@ export default function Matches() {
                       원인), title 툴팁만으로는 터치기기에서 전체 주소를 볼 수
                       없었다 — 하나로 합치고, 클릭하면(터치 포함) 둘 다 보여주는
                       팝오버로 바꾼다. */}
-                      <TableCell className="px-2 text-muted-foreground max-w-[170px]">
+                      <TableCell className="px-2 text-muted-foreground">
                         {match.bidderAddress || match.siteAddress ? (
                           <Popover>
                             <PopoverTrigger asChild>
                               <button
                                 type="button"
-                                className="flex w-full items-start gap-1.5 text-left hover:text-foreground"
+                                className="flex w-full min-w-0 items-start gap-1.5 text-left hover:text-foreground"
                               >
                                 <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                                <span className="truncate">{match.bidderAddress ?? match.siteAddress}</span>
+                                <span className="min-w-0 truncate">{match.bidderAddress ?? match.siteAddress}</span>
                               </button>
                             </PopoverTrigger>
                             <PopoverContent className="w-80 space-y-2 text-xs">
@@ -691,15 +703,15 @@ export default function Matches() {
                           </span>
                         )}
                       </TableCell>
-                      <TableCell className="px-2 max-w-[150px]">
+                      <TableCell className="px-2">
                         <div className="flex flex-wrap items-center gap-1">
                           <Phone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                           {isUsablePhone(match.bidderPhone) ? (
-                            <a href={telHref(match.bidderPhone!)} className="text-primary hover:underline break-words">
+                            <a href={telHref(match.bidderPhone!)} className="text-primary hover:underline">
                               {match.bidderPhone}
                             </a>
                           ) : (
-                            <span className="text-muted-foreground break-words">
+                            <span className="text-muted-foreground">
                               {match.bidderPhone ? "번호 비공개(마스킹)" : "연락처 미확인"}
                             </span>
                           )}
@@ -727,12 +739,15 @@ export default function Matches() {
                       daily-scan.ts가 매칭 시점에 이미 서버(SCAN_ROOT)에
                       저장해두고 있었다 — 화면에서 열어볼 수 있는 링크가
                       없었을 뿐이라 여기에 추가한다. */}
-                      <TableCell className="px-2 max-w-[160px]">
+                      <TableCell className="px-2">
                         {match.attachmentFileName ? (
-                          <div className="flex items-center gap-1.5 text-xs">
+                          <div className="flex min-w-0 items-center gap-1.5 text-xs">
                             <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                             {match.attachmentDeletedAt ? (
-                              <span className="text-muted-foreground truncate" title={match.attachmentFileName}>
+                              <span
+                                className="min-w-0 truncate text-muted-foreground"
+                                title={`${match.attachmentFileName} (보관기간 경과로 삭제됨)`}
+                              >
                                 {match.attachmentFileName} (보관기간 경과로 삭제됨)
                               </span>
                             ) : (
@@ -740,7 +755,7 @@ export default function Matches() {
                                 href={`/api/matches/${match.id}/attachment`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-primary hover:underline truncate"
+                                className="min-w-0 truncate text-primary hover:underline"
                                 title="첨부파일 열기"
                               >
                                 {match.attachmentFileName}
