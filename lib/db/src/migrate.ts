@@ -54,6 +54,26 @@ export async function ensureSchema(): Promise<void> {
     ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS secondary_min_award_amount BIGINT;
     ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS secondary_max_award_amount BIGINT;
 
+    -- 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
+    -- 야. msjbro에는 admin 의 모든 정보를 공유하지않아... 두 아이디로 입력은
+    -- 서로 영향을 미치지 않아"): 예전에는 이 테이블이 id가 항상 1인 단일
+    -- 행(전체 시스템 공용 설정)이었다. 계정마다 독립된 설정 행을 갖도록
+    -- admin_user_id를 추가한다. 이미 배포되어 있던(admin 계정만 쓰던 시절의)
+    -- 기존 행은 admin 계정 소유로 채워 넣는다 — ensureAdminSeeded()가
+    -- ensureSchema() 다음에 실행되므로, 이 시점에 admin_users에 이미 'admin'
+    -- 행이 있는 경우(=이번이 첫 배포가 아닌 경우)에만 채워지고, 정말 처음
+    -- 배포되는 빈 DB에서는 app_settings에도 아직 행이 없어 채울 것이 없다.
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS admin_user_id INTEGER REFERENCES admin_users(id);
+    UPDATE app_settings SET admin_user_id = (SELECT id FROM admin_users WHERE username = 'admin' LIMIT 1)
+      WHERE admin_user_id IS NULL;
+    ALTER TABLE app_settings ALTER COLUMN admin_user_id SET NOT NULL;
+    -- id 컬럼은 과거에는 항상 1(DEFAULT 1)이었지만, 이제 계정마다 새 행이
+    -- 생기므로 값을 명시하지 않고 INSERT해도 겹치지 않게 시퀀스를 건다.
+    CREATE SEQUENCE IF NOT EXISTS app_settings_id_seq OWNED BY app_settings.id;
+    SELECT setval('app_settings_id_seq', COALESCE((SELECT MAX(id) FROM app_settings), 1));
+    ALTER TABLE app_settings ALTER COLUMN id SET DEFAULT nextval('app_settings_id_seq');
+    CREATE UNIQUE INDEX IF NOT EXISTS app_settings_admin_user_id_idx ON app_settings (admin_user_id);
+
     CREATE TABLE IF NOT EXISTS daily_scan_runs (
       id SERIAL PRIMARY KEY,
       target_dates JSONB NOT NULL,
@@ -79,8 +99,22 @@ export async function ensureSchema(): Promise<void> {
     UPDATE daily_scan_runs
       SET status = 'failed', error_message = '서버 재배포로 스캔이 중단되었습니다.', finished_at = now()
       WHERE status = 'running';
-    CREATE UNIQUE INDEX IF NOT EXISTS daily_scan_runs_single_running
-      ON daily_scan_runs (status) WHERE status = 'running';
+
+    -- 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
+    -- 야... 두 아이디로 입력은 서로 영향을 미치지 않아"): 스캔 실행도 계정마다
+    -- 독립적으로 돈다. 기존 행(admin 계정만 쓰던 시절)은 admin 소유로 채운다.
+    ALTER TABLE daily_scan_runs ADD COLUMN IF NOT EXISTS admin_user_id INTEGER REFERENCES admin_users(id);
+    UPDATE daily_scan_runs SET admin_user_id = (SELECT id FROM admin_users WHERE username = 'admin' LIMIT 1)
+      WHERE admin_user_id IS NULL;
+    ALTER TABLE daily_scan_runs ALTER COLUMN admin_user_id SET NOT NULL;
+
+    -- 위 "동시 실행 방지" 인덱스를 계정 단위로 바꾼다 — admin과 msjbro가 각자
+    -- 07시에 자동 스캔을 돌리므로(계정마다 독립 실행), 한 계정이 스캔 중이라고
+    -- 다른 계정의 스캔까지 막히면 안 된다. 같은 계정 안에서만 동시 실행을
+    -- 막는다(자동 스캔과 수동 "지금 실행"이 겹치는 경우 등).
+    DROP INDEX IF EXISTS daily_scan_runs_single_running;
+    CREATE UNIQUE INDEX IF NOT EXISTS daily_scan_runs_single_running_per_admin
+      ON daily_scan_runs (admin_user_id) WHERE status = 'running';
 
     CREATE TABLE IF NOT EXISTS awarded_matches (
       id SERIAL PRIMARY KEY,
@@ -124,6 +158,21 @@ export async function ensureSchema(): Promise<void> {
     DROP INDEX IF EXISTS awarded_matches_unique_hit;
     CREATE UNIQUE INDEX IF NOT EXISTS awarded_matches_unique_hit
       ON awarded_matches (source, notice_number, matched_keyword, attachment_file_name);
+
+    -- 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
+    -- 야. msjbro에는 admin 의 모든 정보를 공유하지않아... 두 아이디로 입력은
+    -- 서로 영향을 미치지 않아"): 리드(매칭 결과)도 계정마다 독립적으로 쌓인다.
+    -- 기존 행(admin 계정만 쓰던 시절)은 admin 소유로 채운다. 유니크 인덱스에도
+    -- admin_user_id를 포함시켜, 두 계정이 우연히 같은 키워드로 같은 공고를
+    -- 각자 찾아내도 한쪽이 다른 쪽 결과를 가려버리지(onConflictDoNothing으로
+    -- 씹히지) 않고 각자의 리드로 독립적으로 남게 한다.
+    ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS admin_user_id INTEGER REFERENCES admin_users(id);
+    UPDATE awarded_matches SET admin_user_id = (SELECT id FROM admin_users WHERE username = 'admin' LIMIT 1)
+      WHERE admin_user_id IS NULL;
+    ALTER TABLE awarded_matches ALTER COLUMN admin_user_id SET NOT NULL;
+    DROP INDEX IF EXISTS awarded_matches_unique_hit;
+    CREATE UNIQUE INDEX IF NOT EXISTS awarded_matches_unique_hit
+      ON awarded_matches (admin_user_id, source, notice_number, matched_keyword, attachment_file_name);
 
     -- 첨부파일 5개월 보관/자동삭제(attachment-cleanup.ts). 채워지면 디스크 파일은
     -- 이미 삭제된 상태이고 리드 레코드 자체는 남아있음을 뜻한다.
