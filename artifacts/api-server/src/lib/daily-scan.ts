@@ -737,17 +737,252 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         // 하는거야" / 2026-09-18 사용자 요청: "10억 이상 낙찰 공사건중
         // 사용자가 입력하는 키워드가 있으면 '사용자지정' 이라는 이름으로
         // 키워드를 검색해서 똑같이 list up 해줘. 공사 제목에 들어가 있는
-        // 키워드는 or 개념으로 하고 첨부파일은 모두 해줘"): 아래 1차
-        // 파이프라인(예산/추정가격/공종/첨부파일 키워드 검색)과 완전히 독립된
-        // 2차 조건("사용자지정"). 공고 제목에 사용자가 등록한 키워드 중
-        // 하나라도(OR) 있고 낙찰금액이 지정한 범위(권장: 10억 이상) 안이면,
-        // 아래 필터들과 무관하게 그 자체로 리드 등록한다. 화면/메일에는 실제
-        // 매칭된 키워드가 아니라 통일된 라벨 "사용자지정"으로 표시하고(어떤
-        // 키워드였는지는 surroundingText에만 남겨 추적용으로 보존), 첨부파일
-        // 내용은 검색하지 않지만(제목만으로 이미 매칭 확정) 해당 공고의
-        // 첨부파일은 전부 내려받아 1차 매칭과 동일하게 보관/열람/메일 첨부가
-        // 되게 한다.
-        if (settings.secondaryKeywords.length > 0) {
+        // 키워드는 or 개념으로 하고 첨부파일은 모두 해줘" / 2026-09-18 사용자
+        // 재지적: "정확히 말하면 키워드가 있는 건 중 금액 설정하는 방법과
+        // 10억이상 공사건 중 키워드가 없는건 중 제목에 새로 지정하는 키워드가
+        // 있는거는 검색해 달라는거야. 키워드와 키워드2 개념이야. 둘은 달라"):
+        // 1차 키워드(matchKeywords, 첨부파일 내용 검색)와 2차 키워드("사용자지정",
+        // 공고 제목 검색)는 서로 다른 개념이지만 상호 배타적으로 적용한다 — 아래
+        // primaryPipeline 블록에서 1차 키워드가 실제로 매칭되면(수량까지 확정된
+        // 진짜 매칭, primaryMatchedAny=true) "사용자지정" 조건은 적용하지 않는다.
+        // 1차 키워드가 없는(또는 예산/추정가격/공종/첨부파일 등 1차 조건을 애초에
+        // 통과하지 못한) 공고 중에서만, 낙찰금액이 지정한 범위(권장: 10억 이상)
+        // 안이고 공고 제목에 사용자가 등록한 키워드 중 하나라도(OR) 있으면
+        // "사용자지정"으로 리드 등록한다(맨 아래 참고). 화면/메일에는 실제 매칭된
+        // 키워드가 아니라 통일된 라벨 "사용자지정"으로 표시하고(어떤 키워드였는지는
+        // surroundingText에만 남겨 추적용으로 보존), 첨부파일 내용은 검색하지
+        // 않지만(제목만으로 이미 매칭 확정) 해당 공고의 첨부파일은 전부 내려받아
+        // 1차 매칭과 동일하게 보관/열람/메일 첨부가 되게 한다.
+        let primaryMatchedAny = false;
+        primaryPipeline: {
+        // 요구사항 3: 공사 규모 필터 (최종 확인).
+        const budgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0);
+        if (budgetAmount < settings.minBudgetAmount) {
+          funnel.skippedBudget += 1;
+          break primaryPipeline;
+        }
+
+        // 요구사항 2: 추정가격(presmptPrce) 범위 필터. 값이 있을 때만 적용한다 —
+        // 일부 공고는 추정가격을 공개하지 않아 0/누락으로 오는 경우가 있는데, 그런
+        // 공고까지 걸러내면 위의 예산 기준 필터와 상충해 리드를 놓치게 된다.
+        const estimatedAmount = Number(detail.presmptPrce ?? 0) || null;
+        if (estimatedAmount != null) {
+          if (settings.minEstimatedPrice != null && estimatedAmount < settings.minEstimatedPrice) {
+            funnel.skippedEstimatedPrice += 1;
+            break primaryPipeline;
+          }
+          if (settings.maxEstimatedPrice != null && estimatedAmount > settings.maxEstimatedPrice) {
+            funnel.skippedEstimatedPrice += 1;
+            break primaryPipeline;
+          }
+        }
+
+        // 원인 진단용 임시 로그: "추정가격 미공개라서 예산(낙찰금액) 기준으로만
+        // 통과한 건"과 "추정가격이 실제로 존재하는 건"을 구분하기 위해 원본 금액
+        // 필드를 그대로 남긴다. (사용자가 나라장터 원본 사이트의 "추정가격≥N"
+        // 필터 결과와 우리 시스템의 후보 수가 다르다고 지적한 것을 검증하기 위함)
+        logger.info(
+          {
+            noticeNumber,
+            bidNtceNm: detail.bidNtceNm,
+            bdgtAmt: detail.bdgtAmt,
+            sucsfbidAmt: award.sucsfbidAmt,
+            presmptPrce: detail.presmptPrce,
+            budgetAmount,
+            estimatedAmount,
+          },
+          "일별 스캔[진단]: 금액 필드 원본값",
+        );
+
+        // 요구사항 1: 업무구분(공종) 필터 — 공사 카테고리에만 의미가 있다(주공종명/
+        // 부공종명은 Cnstwk 응답에만 존재).
+        const { matched: workTypeMatched, workTypeName } =
+          source === "공사" ? classifyWorkType(detail, settings.workTypeKeywords) : { matched: true, workTypeName: null };
+        if (!workTypeMatched) {
+          funnel.skippedWorkType += 1;
+          break primaryPipeline;
+        }
+
+        // 요구사항 4, 5: 공사 내역/요청서 첨부파일에서 키워드(=우리가 설정한 품목) 검색.
+        const attachments = collectAttachments(detail).sort(
+          (a, b) => Number(isPriorityAttachment(b.name)) - Number(isPriorityAttachment(a.name)),
+        );
+        if (attachments.length === 0) {
+          // 원인 진단용 임시 로그: 매칭이 0건인 이유가 "첨부파일 자체가 없어서"인지
+          // 아니면 다른 단계(다운로드/텍스트 추출)에서 실패하는지 구분하기 위함.
+          funnel.noAttachmentUrl += 1;
+          logger.warn(
+            { noticeNumber, source, bidNtceNm: detail.bidNtceNm },
+            "일별 스캔[진단]: 공고 상세에 첨부파일 URL이 없음",
+          );
+          break primaryPipeline;
+        }
+        funnel.reachedAttachmentSearch += 1;
+
+        const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-"));
+        try {
+          for (const attachment of attachments) {
+            let downloadedPath: string;
+            try {
+              // 요구사항(첨부파일 보관, 2026-09-09): 일시적 네트워크 오류로 매칭
+              // 자체를 놓치는 일("누락")을 줄이기 위해 재시도 횟수를 2→3으로 상향.
+              const download = await withRetry(
+                () => downloadAttachment(attachment.url, scratchDir, attachment.name),
+                3,
+              );
+              downloadedPath = download.value;
+            } catch (error) {
+              logger.warn({ err: error, noticeNumber, fileName: attachment.name }, "일별 스캔: 첨부파일 다운로드 실패");
+              continue;
+            }
+
+            let searchRoots = [downloadedPath];
+            if (path.extname(downloadedPath).toLowerCase() === ".zip") {
+              try {
+                searchRoots = await extractZipRecursively(downloadedPath);
+              } catch (error) {
+                logger.warn({ err: error, noticeNumber, fileName: attachment.name }, "일별 스캔: ZIP 압축 해제 실패");
+                continue;
+              }
+            }
+
+            for (const searchablePath of searchRoots) {
+              if (path.extname(searchablePath).toLowerCase() === ".zip") continue;
+              if ((await stat(searchablePath)).isDirectory()) continue;
+              let segments;
+              try {
+                segments = await extractSegments(searchablePath);
+              } catch (error) {
+                // 원인 진단용 임시 로그: 예전에는 여기서 에러를 완전히 삼켜서
+                // (아무 로그도 없이 continue) 텍스트 추출 자체가 매번 실패해도
+                // 알 방법이 없었다. 확장자와 에러 메시지를 남긴다.
+                logger.warn(
+                  { err: error, noticeNumber, fileName: path.basename(searchablePath), ext: path.extname(searchablePath) },
+                  "일별 스캔[진단]: 첨부파일 텍스트 추출 실패",
+                );
+                continue;
+              }
+              // 요구사항 4: 설정된 키워드(=선택한 품목, 기본 "부직포")가 있는 공고만.
+              const matches = searchSegments(segments, settings.matchKeywords);
+              logger.info(
+                {
+                  noticeNumber,
+                  fileName: path.basename(searchablePath),
+                  ext: path.extname(searchablePath),
+                  segmentCount: segments.length,
+                  matchCount: matches.length,
+                },
+                "일별 스캔[진단]: 첨부파일 텍스트 추출 결과",
+              );
+              if (matches.length === 0) continue;
+
+              // 요구사항 6: 매칭된 첨부파일을 영구 저장(볼륨)한다.
+              const matchedFileName = sanitizeName(attachment.name);
+              const storedDir = path.join(SCAN_ROOT, noticeNumber);
+              await mkdir(storedDir, { recursive: true });
+              const storedPath = path.join(storedDir, path.basename(searchablePath));
+              await copyFile(searchablePath, storedPath).catch(() => {});
+
+              for (const match of matches) {
+                const matchedKeyword = match.foundKeywords[0] ?? settings.matchKeywords[0] ?? "";
+                const itemFields = extractItemFields(match.originalText, settings.matchKeywords);
+                const quantityText =
+                  [itemFields.itemQuantity, itemFields.itemUnit]
+                    .filter((value) => value && value !== "미공개/확인불가")
+                    .join(" ") || null;
+                // 요구사항(2026-09-10 사용자 요청: "수량이 없는 키워드는 검색하지
+                // 마 ... 검색 결과에 키워드/수량을 꼭 함께 넣어줘"): 문서에 키워드
+                // 단어 자체는 있어도 수량을 특정할 수 없으면 실제 발주 물량을 알 수
+                // 없는 단순 언급일 가능성이 커서 영업 리드로 만들지 않는다.
+                if (!quantityText) continue;
+                // 요구사항(2026-09-18 사용자 재지적: "키워드가 있는 건 중 금액 설정하는
+                // 방법과 10억이상 공사건 중 키워드가 없는건 중 제목에 새로 지정하는
+                // 키워드가 있는거는 검색해 달라는거야. 키워드와 키워드2 개념이야. 둘은
+                // 달라"): 수량까지 확정된 진짜 1차 키워드 매칭이므로, DB 삽입(dedupe)
+                // 성공 여부와 무관하게 이 공고는 "1차 키워드 있음"으로 표시해 아래
+                // "사용자지정"(2차 키워드) 조건이 중복 적용되지 않게 한다.
+                primaryMatchedAny = true;
+                // 요구사항 6: 현장명 / 현장사무소 / 수량.
+                const siteOffice =
+                  guessSiteOffice(match.surroundingText) ??
+                  guessSiteOffice(match.originalText) ??
+                  (detail.dminsttNm ? `${String(detail.dminsttNm)} (발주기관 문의)` : null);
+
+                // 요구사항(2026-09-12: 주소를 사업자주소 대신 실제 공사현장으로 /
+                // 2026-09-13 사용자 지적: "이미 계속 주소 미확인으로 나오고
+                // 있어. 보통 공고제목이나 글 내용에 공사현장 주소가
+                // 나와있거든"): "현장위치:" 같은 라벨이 있으면 최우선으로 쓰고
+                // (extractSiteAddress), 없으면 라벨 없이도 공고제목이나
+                // 첨부파일 본문에 섞여 나오는 주소 패턴 자체를 찾는다
+                // (extractGeneralAddress) — 공고제목을 첨부파일 본문보다 먼저
+                // 보는 이유는 발주기관이 직접 적은 제목이 첨부파일 안의 다른
+                // 주소(예: 관련 없는 참고현장)보다 신뢰도가 높기 때문. 그래도
+                // 못 찾으면 마지막으로 공사현장지역명(cnstrtsiteRgnNm, 구
+                // 단위까지만 나오는 API 필드)으로 대체한다 — bidderAddress
+                // (아래, 낙찰자 사업자 소재지)와는 다른 값이다.
+                const attachmentText = `${match.surroundingText}\n${match.originalText}`;
+                const siteAddress =
+                  extractSiteAddress(attachmentText) ??
+                  extractGeneralAddress(String(detail.bidNtceNm ?? "")) ??
+                  extractGeneralAddress(attachmentText) ??
+                  (String(detail.cnstrtsiteRgnNm ?? "").trim() || null);
+
+                // 요구사항 7, 8: 낙찰자 연락처/주소 — 정부 기록에 없으면 첨부파일,
+                // 그래도 없으면 네이버 API로 보완.
+                const { address: bidderAddress, phone: bidderPhone, contactSource } = await resolveBidderContactCached(
+                  String(award.bidwinnrNm ?? "").trim() || null,
+                  String(award.bidwinnrAdrs ?? "").trim() || null,
+                  String(award.bidwinnrTelNo ?? "").trim() || null,
+                  `${match.surroundingText}\n${match.originalText}`,
+                  String(award.bidwinnrBizno ?? "").trim() || null,
+                );
+
+                try {
+                  const inserted = await db
+                    .insert(awardedMatchesTable)
+                    .values({
+                      scanRunId: run.id,
+                      noticeNumber,
+                      noticeName: String(detail.bidNtceNm ?? "").trim() || null,
+                      siteName: String(detail.bidNtceNm ?? "").trim() || null,
+                      siteOffice,
+                      siteAddress,
+                      workTypeName,
+                      workCategory: source,
+                      demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
+                      bidderName: String(award.bidwinnrNm ?? "").trim() || null,
+                      bidderBizno: String(award.bidwinnrBizno ?? "").trim() || null,
+                      bidderAddress,
+                      bidderPhone,
+                      contactSource,
+                      budgetAmount: budgetAmount || null,
+                      estimatedAmount,
+                      awardAmount: Number(award.sucsfbidAmt ?? 0) || null,
+                      awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
+                      matchedKeyword,
+                      quantityText,
+                      surroundingText: match.surroundingText,
+                      attachmentFileName: matchedFileName,
+                      attachmentStoredPath: path.relative(SCAN_ROOT, storedPath),
+                    })
+                    .onConflictDoNothing()
+                    .returning({ id: awardedMatchesTable.id });
+                  if (inserted.length > 0) matchesFound += 1;
+                } catch (error) {
+                  logger.warn({ err: error, noticeNumber }, "일별 스캔: 매칭 결과 저장 실패");
+                }
+              }
+            }
+          }
+        } finally {
+          await rm(scratchDir, { recursive: true, force: true });
+        }
+        }
+
+        // "사용자지정"(2차 키워드) 조건: 위 primaryPipeline에서 1차 키워드가
+        // 이 공고에 대해 실제로 매칭되지 않았을 때만 적용한다(중복 리드 방지 —
+        // 2026-09-18 사용자 재지적 참고).
+        if (!primaryMatchedAny && settings.secondaryKeywords.length > 0) {
           const secondaryAwardAmount = Number(award.sucsfbidAmt ?? 0) || null;
           const inSecondaryRange =
             secondaryAwardAmount != null &&
@@ -847,221 +1082,6 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           }
         }
 
-        // 요구사항 3: 공사 규모 필터 (최종 확인).
-        const budgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0);
-        if (budgetAmount < settings.minBudgetAmount) {
-          funnel.skippedBudget += 1;
-          continue;
-        }
-
-        // 요구사항 2: 추정가격(presmptPrce) 범위 필터. 값이 있을 때만 적용한다 —
-        // 일부 공고는 추정가격을 공개하지 않아 0/누락으로 오는 경우가 있는데, 그런
-        // 공고까지 걸러내면 위의 예산 기준 필터와 상충해 리드를 놓치게 된다.
-        const estimatedAmount = Number(detail.presmptPrce ?? 0) || null;
-        if (estimatedAmount != null) {
-          if (settings.minEstimatedPrice != null && estimatedAmount < settings.minEstimatedPrice) {
-            funnel.skippedEstimatedPrice += 1;
-            continue;
-          }
-          if (settings.maxEstimatedPrice != null && estimatedAmount > settings.maxEstimatedPrice) {
-            funnel.skippedEstimatedPrice += 1;
-            continue;
-          }
-        }
-
-        // 원인 진단용 임시 로그: "추정가격 미공개라서 예산(낙찰금액) 기준으로만
-        // 통과한 건"과 "추정가격이 실제로 존재하는 건"을 구분하기 위해 원본 금액
-        // 필드를 그대로 남긴다. (사용자가 나라장터 원본 사이트의 "추정가격≥N"
-        // 필터 결과와 우리 시스템의 후보 수가 다르다고 지적한 것을 검증하기 위함)
-        logger.info(
-          {
-            noticeNumber,
-            bidNtceNm: detail.bidNtceNm,
-            bdgtAmt: detail.bdgtAmt,
-            sucsfbidAmt: award.sucsfbidAmt,
-            presmptPrce: detail.presmptPrce,
-            budgetAmount,
-            estimatedAmount,
-          },
-          "일별 스캔[진단]: 금액 필드 원본값",
-        );
-
-        // 요구사항 1: 업무구분(공종) 필터 — 공사 카테고리에만 의미가 있다(주공종명/
-        // 부공종명은 Cnstwk 응답에만 존재).
-        const { matched: workTypeMatched, workTypeName } =
-          source === "공사" ? classifyWorkType(detail, settings.workTypeKeywords) : { matched: true, workTypeName: null };
-        if (!workTypeMatched) {
-          funnel.skippedWorkType += 1;
-          continue;
-        }
-
-        // 요구사항 4, 5: 공사 내역/요청서 첨부파일에서 키워드(=우리가 설정한 품목) 검색.
-        const attachments = collectAttachments(detail).sort(
-          (a, b) => Number(isPriorityAttachment(b.name)) - Number(isPriorityAttachment(a.name)),
-        );
-        if (attachments.length === 0) {
-          // 원인 진단용 임시 로그: 매칭이 0건인 이유가 "첨부파일 자체가 없어서"인지
-          // 아니면 다른 단계(다운로드/텍스트 추출)에서 실패하는지 구분하기 위함.
-          funnel.noAttachmentUrl += 1;
-          logger.warn(
-            { noticeNumber, source, bidNtceNm: detail.bidNtceNm },
-            "일별 스캔[진단]: 공고 상세에 첨부파일 URL이 없음",
-          );
-          continue;
-        }
-        funnel.reachedAttachmentSearch += 1;
-
-        const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-"));
-        try {
-          for (const attachment of attachments) {
-            let downloadedPath: string;
-            try {
-              // 요구사항(첨부파일 보관, 2026-09-09): 일시적 네트워크 오류로 매칭
-              // 자체를 놓치는 일("누락")을 줄이기 위해 재시도 횟수를 2→3으로 상향.
-              const download = await withRetry(
-                () => downloadAttachment(attachment.url, scratchDir, attachment.name),
-                3,
-              );
-              downloadedPath = download.value;
-            } catch (error) {
-              logger.warn({ err: error, noticeNumber, fileName: attachment.name }, "일별 스캔: 첨부파일 다운로드 실패");
-              continue;
-            }
-
-            let searchRoots = [downloadedPath];
-            if (path.extname(downloadedPath).toLowerCase() === ".zip") {
-              try {
-                searchRoots = await extractZipRecursively(downloadedPath);
-              } catch (error) {
-                logger.warn({ err: error, noticeNumber, fileName: attachment.name }, "일별 스캔: ZIP 압축 해제 실패");
-                continue;
-              }
-            }
-
-            for (const searchablePath of searchRoots) {
-              if (path.extname(searchablePath).toLowerCase() === ".zip") continue;
-              if ((await stat(searchablePath)).isDirectory()) continue;
-              let segments;
-              try {
-                segments = await extractSegments(searchablePath);
-              } catch (error) {
-                // 원인 진단용 임시 로그: 예전에는 여기서 에러를 완전히 삼켜서
-                // (아무 로그도 없이 continue) 텍스트 추출 자체가 매번 실패해도
-                // 알 방법이 없었다. 확장자와 에러 메시지를 남긴다.
-                logger.warn(
-                  { err: error, noticeNumber, fileName: path.basename(searchablePath), ext: path.extname(searchablePath) },
-                  "일별 스캔[진단]: 첨부파일 텍스트 추출 실패",
-                );
-                continue;
-              }
-              // 요구사항 4: 설정된 키워드(=선택한 품목, 기본 "부직포")가 있는 공고만.
-              const matches = searchSegments(segments, settings.matchKeywords);
-              logger.info(
-                {
-                  noticeNumber,
-                  fileName: path.basename(searchablePath),
-                  ext: path.extname(searchablePath),
-                  segmentCount: segments.length,
-                  matchCount: matches.length,
-                },
-                "일별 스캔[진단]: 첨부파일 텍스트 추출 결과",
-              );
-              if (matches.length === 0) continue;
-
-              // 요구사항 6: 매칭된 첨부파일을 영구 저장(볼륨)한다.
-              const matchedFileName = sanitizeName(attachment.name);
-              const storedDir = path.join(SCAN_ROOT, noticeNumber);
-              await mkdir(storedDir, { recursive: true });
-              const storedPath = path.join(storedDir, path.basename(searchablePath));
-              await copyFile(searchablePath, storedPath).catch(() => {});
-
-              for (const match of matches) {
-                const matchedKeyword = match.foundKeywords[0] ?? settings.matchKeywords[0] ?? "";
-                const itemFields = extractItemFields(match.originalText, settings.matchKeywords);
-                const quantityText =
-                  [itemFields.itemQuantity, itemFields.itemUnit]
-                    .filter((value) => value && value !== "미공개/확인불가")
-                    .join(" ") || null;
-                // 요구사항(2026-09-10 사용자 요청: "수량이 없는 키워드는 검색하지
-                // 마 ... 검색 결과에 키워드/수량을 꼭 함께 넣어줘"): 문서에 키워드
-                // 단어 자체는 있어도 수량을 특정할 수 없으면 실제 발주 물량을 알 수
-                // 없는 단순 언급일 가능성이 커서 영업 리드로 만들지 않는다.
-                if (!quantityText) continue;
-                // 요구사항 6: 현장명 / 현장사무소 / 수량.
-                const siteOffice =
-                  guessSiteOffice(match.surroundingText) ??
-                  guessSiteOffice(match.originalText) ??
-                  (detail.dminsttNm ? `${String(detail.dminsttNm)} (발주기관 문의)` : null);
-
-                // 요구사항(2026-09-12: 주소를 사업자주소 대신 실제 공사현장으로 /
-                // 2026-09-13 사용자 지적: "이미 계속 주소 미확인으로 나오고
-                // 있어. 보통 공고제목이나 글 내용에 공사현장 주소가
-                // 나와있거든"): "현장위치:" 같은 라벨이 있으면 최우선으로 쓰고
-                // (extractSiteAddress), 없으면 라벨 없이도 공고제목이나
-                // 첨부파일 본문에 섞여 나오는 주소 패턴 자체를 찾는다
-                // (extractGeneralAddress) — 공고제목을 첨부파일 본문보다 먼저
-                // 보는 이유는 발주기관이 직접 적은 제목이 첨부파일 안의 다른
-                // 주소(예: 관련 없는 참고현장)보다 신뢰도가 높기 때문. 그래도
-                // 못 찾으면 마지막으로 공사현장지역명(cnstrtsiteRgnNm, 구
-                // 단위까지만 나오는 API 필드)으로 대체한다 — bidderAddress
-                // (아래, 낙찰자 사업자 소재지)와는 다른 값이다.
-                const attachmentText = `${match.surroundingText}\n${match.originalText}`;
-                const siteAddress =
-                  extractSiteAddress(attachmentText) ??
-                  extractGeneralAddress(String(detail.bidNtceNm ?? "")) ??
-                  extractGeneralAddress(attachmentText) ??
-                  (String(detail.cnstrtsiteRgnNm ?? "").trim() || null);
-
-                // 요구사항 7, 8: 낙찰자 연락처/주소 — 정부 기록에 없으면 첨부파일,
-                // 그래도 없으면 네이버 API로 보완.
-                const { address: bidderAddress, phone: bidderPhone, contactSource } = await resolveBidderContactCached(
-                  String(award.bidwinnrNm ?? "").trim() || null,
-                  String(award.bidwinnrAdrs ?? "").trim() || null,
-                  String(award.bidwinnrTelNo ?? "").trim() || null,
-                  `${match.surroundingText}\n${match.originalText}`,
-                  String(award.bidwinnrBizno ?? "").trim() || null,
-                );
-
-                try {
-                  const inserted = await db
-                    .insert(awardedMatchesTable)
-                    .values({
-                      scanRunId: run.id,
-                      noticeNumber,
-                      noticeName: String(detail.bidNtceNm ?? "").trim() || null,
-                      siteName: String(detail.bidNtceNm ?? "").trim() || null,
-                      siteOffice,
-                      siteAddress,
-                      workTypeName,
-                      workCategory: source,
-                      demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
-                      bidderName: String(award.bidwinnrNm ?? "").trim() || null,
-                      bidderBizno: String(award.bidwinnrBizno ?? "").trim() || null,
-                      bidderAddress,
-                      bidderPhone,
-                      contactSource,
-                      budgetAmount: budgetAmount || null,
-                      estimatedAmount,
-                      awardAmount: Number(award.sucsfbidAmt ?? 0) || null,
-                      awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
-                      matchedKeyword,
-                      quantityText,
-                      surroundingText: match.surroundingText,
-                      attachmentFileName: matchedFileName,
-                      attachmentStoredPath: path.relative(SCAN_ROOT, storedPath),
-                    })
-                    .onConflictDoNothing()
-                    .returning({ id: awardedMatchesTable.id });
-                  if (inserted.length > 0) matchesFound += 1;
-                } catch (error) {
-                  logger.warn({ err: error, noticeNumber }, "일별 스캔: 매칭 결과 저장 실패");
-                }
-              }
-            }
-          }
-        } finally {
-          await rm(scratchDir, { recursive: true, force: true });
-        }
       }
     }
 
@@ -1091,12 +1111,86 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
 
           // 요구사항(2026-09-15 사용자 요청: 2차 키워드 — 낙찰금액과 공사제목만
           // 넣으면 1차 키워드가 없어도 검색 / 2026-09-18 사용자 요청: "사용자지정"
-          // 라벨 통일): 나라장터와 동일한 "사용자지정" 조건. LH는 실제
-          // 낙찰금액(sucsfbidAmt에 해당하는 필드)을 제공하지 않아(lh-source.ts
-          // 상단 주석 참고) 기초금액(fdmtlAmt, 예산)을 대신 비교 기준으로 쓴다.
-          // LH는 첨부파일 다운로드 링크 자체를 제공하지 않으므로(위 LH 낙찰
-          // 검색과 동일) 첨부파일 없이 제목 매칭만으로 리드를 남긴다.
-          if (settings.secondaryKeywords.length > 0) {
+          // 라벨 통일 / 2026-09-18 사용자 재지적: "정확히 말하면 키워드가 있는 건
+          // 중 금액 설정하는 방법과 10억이상 공사건 중 키워드가 없는건 중 제목에
+          // 새로 지정하는 키워드가 있는거는 검색해 달라는거야. 키워드와 키워드2
+          // 개념이야. 둘은 달라"): 나라장터와 동일하게, 1차 키워드(matchKeywords,
+          // 공고 제목 검색 — LH는 첨부파일이 없어 제목만 검색)와 2차 키워드
+          // ("사용자지정")는 상호 배타적이다. 아래 primaryPipeline에서 1차
+          // 키워드가 제목에 매칭되면(primaryMatchedAny=true) "사용자지정" 조건은
+          // 적용하지 않는다. LH는 실제 낙찰금액(sucsfbidAmt에 해당하는 필드)을
+          // 제공하지 않아(lh-source.ts 상단 주석 참고) 기초금액(fdmtlAmt, 예산)을
+          // 대신 비교 기준으로 쓴다. LH는 첨부파일 다운로드 링크 자체를 제공하지
+          // 않으므로(위 LH 낙찰 검색과 동일) 첨부파일 없이 제목 매칭만으로 리드를
+          // 남긴다.
+          let primaryMatchedAny = false;
+
+          primaryPipeline: {
+          const budgetAmount = award.fdmtlAmt;
+          if (budgetAmount != null && budgetAmount < settings.minBudgetAmount) {
+            funnel.skippedBudget += 1;
+            break primaryPipeline;
+          }
+          const estimatedAmount = award.presmtPrc;
+          if (estimatedAmount != null) {
+            if (settings.minEstimatedPrice != null && estimatedAmount < settings.minEstimatedPrice) {
+              funnel.skippedEstimatedPrice += 1;
+              break primaryPipeline;
+            }
+            if (settings.maxEstimatedPrice != null && estimatedAmount > settings.maxEstimatedPrice) {
+              funnel.skippedEstimatedPrice += 1;
+              break primaryPipeline;
+            }
+          }
+
+          const titleSegments: ExtractedSegment[] = [
+            { text: award.noticeName, sheet: null, page: null, location: "공고명" },
+          ];
+          const matches = searchSegments(titleSegments, settings.matchKeywords);
+          if (matches.length === 0) break primaryPipeline;
+          // 요구사항(2026-09-18 사용자 재지적: "키워드가 있는 건 중 금액 설정하는
+          // 방법과 10억이상 공사건 중 키워드가 없는건 중 제목에 새로 지정하는
+          // 키워드가 있는거는 검색해 달라는거야. 키워드와 키워드2 개념이야. 둘은
+          // 달라"): 1차 키워드가 제목에서 매칭됐으므로 아래 "사용자지정"(2차 키워드)
+          // 조건이 중복 적용되지 않게 표시한다.
+          primaryMatchedAny = true;
+
+          const noticeNumber = `LH-${award.bidNum}-${award.bidDegree}`;
+          for (const match of matches) {
+            const matchedKeyword = match.foundKeywords[0] ?? settings.matchKeywords[0] ?? "";
+            try {
+              const inserted = await db
+                .insert(awardedMatchesTable)
+                .values({
+                  scanRunId: run.id,
+                  source: "LH",
+                  noticeNumber,
+                  noticeName: award.noticeName,
+                  siteName: award.noticeName,
+                  workTypeName: award.workTypeName,
+                  demandAgency: award.zoneHqCd ? `한국토지주택공사 ${award.zoneHqCd}` : "한국토지주택공사",
+                  budgetAmount,
+                  estimatedAmount,
+                  awardDate: award.openDateKey ?? dateKey,
+                  matchedKeyword,
+                  // NULL은 유니크 인덱스에서 서로 다른 값으로 취급되어 재실행 시
+                  // 중복 삽입될 수 있어, 첨부파일이 없는 LH 매칭은 빈 문자열로
+                  // 채운다(dedupe가 정상 동작하도록).
+                  attachmentFileName: "",
+                })
+                .onConflictDoNothing()
+                .returning({ id: awardedMatchesTable.id });
+              if (inserted.length > 0) matchesFound += 1;
+            } catch (error) {
+              logger.warn({ err: error, noticeNumber }, "일별 스캔: LH 매칭 결과 저장 실패");
+            }
+          }
+          }
+
+          // "사용자지정"(2차 키워드) 조건: 위 primaryPipeline에서 1차 키워드가
+          // 이 공고 제목에 실제로 매칭되지 않았을 때만 적용한다(중복 리드 방지 —
+          // 2026-09-18 사용자 재지적 참고).
+          if (!primaryMatchedAny && settings.secondaryKeywords.length > 0) {
             const secondaryProxyAmount = award.fdmtlAmt;
             const inSecondaryRange =
               secondaryProxyAmount != null &&
@@ -1138,59 +1232,6 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
             }
           }
 
-          const budgetAmount = award.fdmtlAmt;
-          if (budgetAmount != null && budgetAmount < settings.minBudgetAmount) {
-            funnel.skippedBudget += 1;
-            continue;
-          }
-          const estimatedAmount = award.presmtPrc;
-          if (estimatedAmount != null) {
-            if (settings.minEstimatedPrice != null && estimatedAmount < settings.minEstimatedPrice) {
-              funnel.skippedEstimatedPrice += 1;
-              continue;
-            }
-            if (settings.maxEstimatedPrice != null && estimatedAmount > settings.maxEstimatedPrice) {
-              funnel.skippedEstimatedPrice += 1;
-              continue;
-            }
-          }
-
-          const titleSegments: ExtractedSegment[] = [
-            { text: award.noticeName, sheet: null, page: null, location: "공고명" },
-          ];
-          const matches = searchSegments(titleSegments, settings.matchKeywords);
-          if (matches.length === 0) continue;
-
-          const noticeNumber = `LH-${award.bidNum}-${award.bidDegree}`;
-          for (const match of matches) {
-            const matchedKeyword = match.foundKeywords[0] ?? settings.matchKeywords[0] ?? "";
-            try {
-              const inserted = await db
-                .insert(awardedMatchesTable)
-                .values({
-                  scanRunId: run.id,
-                  source: "LH",
-                  noticeNumber,
-                  noticeName: award.noticeName,
-                  siteName: award.noticeName,
-                  workTypeName: award.workTypeName,
-                  demandAgency: award.zoneHqCd ? `한국토지주택공사 ${award.zoneHqCd}` : "한국토지주택공사",
-                  budgetAmount,
-                  estimatedAmount,
-                  awardDate: award.openDateKey ?? dateKey,
-                  matchedKeyword,
-                  // NULL은 유니크 인덱스에서 서로 다른 값으로 취급되어 재실행 시
-                  // 중복 삽입될 수 있어, 첨부파일이 없는 LH 매칭은 빈 문자열로
-                  // 채운다(dedupe가 정상 동작하도록).
-                  attachmentFileName: "",
-                })
-                .onConflictDoNothing()
-                .returning({ id: awardedMatchesTable.id });
-              if (inserted.length > 0) matchesFound += 1;
-            } catch (error) {
-              logger.warn({ err: error, noticeNumber }, "일별 스캔: LH 매칭 결과 저장 실패");
-            }
-          }
         }
       }
     }
