@@ -4,8 +4,12 @@ import { getAppSettings, updateAppSettings } from "../lib/settings";
 
 const router: IRouter = Router();
 
-router.get("/settings", async (_req, res) => {
-  res.json(await getAppSettings());
+// 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
+// 야... 두 아이디로 입력은 서로 영향을 미치지 않아"): requireAuth가 이미
+// req.session.userId를 보장하므로(routes/index.ts), 그 값으로 설정을
+// 계정별로 완전히 분리한다.
+router.get("/settings", async (req, res) => {
+  res.json(await getAppSettings(req.session.userId!));
 });
 
 // 요구사항(설정 저장 오류 명확화, 2026-09-09 사용자 리포트: "설정이 없으면
@@ -43,7 +47,7 @@ router.put("/settings", async (req, res) => {
     return;
   }
   try {
-    res.json(await updateAppSettings(input.data));
+    res.json(await updateAppSettings(req.session.userId!, input.data));
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : "설정을 저장하지 못했습니다." });
   }
