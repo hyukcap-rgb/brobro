@@ -5,7 +5,7 @@ import { buildMatchesXlsx, dedupeSecondaryMatches, listAwardedMatches, sendDownl
 import { resolveMatchAttachmentPath } from "../lib/scan-storage";
 import { searchBusinessContactOnPortal, searchBusinessContactOnWeb } from "../lib/bid-processing";
 import { db, awardedMatchesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 // 요구사항(전화번호 검색, 2026-09-09 사용자 리포트: "전화번호를 검색해서
 // 보여줘"): daily-scan.ts를 고쳐도 이미 저장된 기존 리드는 소급 갱신되지
@@ -32,7 +32,7 @@ function serializeMatch(match: Awaited<ReturnType<typeof listAwardedMatches>>[nu
 router.get("/matches", async (req, res) => {
   const params = ListMatchesQueryParams.safeParse(req.query);
   const limit = params.success ? params.data.limit : undefined;
-  const matches = await listAwardedMatches(limit);
+  const matches = await listAwardedMatches(req.session.userId!, limit);
   res.json({ matches: matches.map(serializeMatch) });
 });
 
@@ -42,7 +42,7 @@ router.get("/matches", async (req, res) => {
 // 호출한다(위 deleteAllJobs 등과 동일한 패턴).
 router.delete("/matches/duplicates", async (req, res) => {
   try {
-    const result = await dedupeSecondaryMatches();
+    const result = await dedupeSecondaryMatches(req.session.userId!);
     res.json(result);
   } catch (error) {
     req.log.error({ err: error }, "Could not dedupe secondary matches");
@@ -52,9 +52,9 @@ router.delete("/matches/duplicates", async (req, res) => {
 
 // 요구사항(2026-09-10 사용자 요청: "csv 다운로드는 없어도 돼. 헷갈려"): 엑셀
 // 다운로드 하나만 남기고 CSV 다운로드는 제거한다.
-router.get("/matches/export.xlsx", async (_req, res) => {
+router.get("/matches/export.xlsx", async (req, res) => {
   try {
-    const matches = await listAwardedMatches(5000);
+    const matches = await listAwardedMatches(req.session.userId!, 5000);
     const xlsxPath = await buildMatchesXlsx(matches);
     res.type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     sendDownload(res, xlsxPath, "누적_낙찰검색결과.xlsx");
@@ -69,7 +69,11 @@ router.post("/matches/:id/refresh-contact", async (req, res) => {
     res.status(404).json({ error: "리드를 찾을 수 없습니다." });
     return;
   }
-  const [match] = await db.select().from(awardedMatchesTable).where(eq(awardedMatchesTable.id, id)).limit(1);
+  const [match] = await db
+    .select()
+    .from(awardedMatchesTable)
+    .where(and(eq(awardedMatchesTable.id, id), eq(awardedMatchesTable.adminUserId, req.session.userId!)))
+    .limit(1);
   if (!match) {
     res.status(404).json({ error: "리드를 찾을 수 없습니다." });
     return;
@@ -126,7 +130,9 @@ router.get("/matches/:id/attachment", async (req, res) => {
   const [match] = await db
     .select()
     .from(awardedMatchesTable)
-    .where(eq(awardedMatchesTable.id, params.data.id))
+    .where(
+      and(eq(awardedMatchesTable.id, params.data.id), eq(awardedMatchesTable.adminUserId, req.session.userId!)),
+    )
     .limit(1);
   if (!match?.attachmentStoredPath) {
     res.status(404).json({ error: "저장된 첨부파일이 없습니다." });
