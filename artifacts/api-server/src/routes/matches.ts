@@ -1,7 +1,7 @@
 import path from "node:path";
 import { Router, type IRouter } from "express";
 import { DownloadMatchAttachmentParams, ListMatchesQueryParams } from "@workspace/api-zod";
-import { buildMatchesXlsx, listAwardedMatches, sendDownload } from "../lib/matches-store";
+import { buildMatchesXlsx, dedupeSecondaryMatches, listAwardedMatches, sendDownload } from "../lib/matches-store";
 import { resolveMatchAttachmentPath } from "../lib/scan-storage";
 import { searchBusinessContactOnPortal, searchBusinessContactOnWeb } from "../lib/bid-processing";
 import { db, awardedMatchesTable } from "@workspace/db";
@@ -34,6 +34,20 @@ router.get("/matches", async (req, res) => {
   const limit = params.success ? params.data.limit : undefined;
   const matches = await listAwardedMatches(limit);
   res.json({ matches: matches.map(serializeMatch) });
+});
+
+// 요구사항(2026-09-18 사용자 지적: "조건2번째로 검색된 이곳에서 같은곳이
+// 3개야. 같은곳이 없도록 해야지"): 이미 저장된 "사용자지정" 중복 행을 한 번에
+// 정리하기 위한 관리자 전용 API. 화면 버튼은 만들지 않고 필요할 때 직접
+// 호출한다(위 deleteAllJobs 등과 동일한 패턴).
+router.delete("/matches/duplicates", async (req, res) => {
+  try {
+    const result = await dedupeSecondaryMatches();
+    res.json(result);
+  } catch (error) {
+    req.log.error({ err: error }, "Could not dedupe secondary matches");
+    res.status(500).json({ error: "중복 정리에 실패했습니다." });
+  }
 });
 
 // 요구사항(2026-09-10 사용자 요청: "csv 다운로드는 없어도 돼. 헷갈려"): 엑셀
