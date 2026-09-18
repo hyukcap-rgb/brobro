@@ -512,6 +512,10 @@ export default function Matches() {
                           낙찰일 {sortIndicator("awardDate")}
                         </button>
                       </TableHead>
+                      {/* 요구사항(2026-09-18 사용자 요청: "검색 결과에 공사제목을
+                      보여줘. 낙찰일 다음에 낙찰제목을 넣어줘"): 공고명(=공사제목/
+                      낙찰제목)을 낙찰일 바로 다음 컬럼에 보여준다. */}
+                      <TableHead className="px-2">공사제목</TableHead>
                       <TableHead className="px-2">키워드 · 수량</TableHead>
                       <TableHead className="px-2">
                         <button
@@ -547,7 +551,7 @@ export default function Matches() {
                       return (
                         <Fragment key={dateKey}>
                           <TableRow className="bg-muted/40 hover:bg-muted/40">
-                            <TableCell colSpan={8} className="py-2 px-2">
+                            <TableCell colSpan={9} className="py-2 px-2">
                               <button
                                 type="button"
                                 onClick={() => toggleDateCollapsed(dateKey)}
@@ -586,6 +590,15 @@ export default function Matches() {
                         </div>
                       </TableCell>
                       <TableCell className="px-2 whitespace-nowrap">{match.awardDate ?? "-"}</TableCell>
+                      <TableCell className="px-2 max-w-[220px]">
+                        {match.noticeName ? (
+                          <span className="block truncate" title={match.noticeName}>
+                            {match.noticeName}
+                          </span>
+                        ) : (
+                          "-"
+                        )}
+                      </TableCell>
                       {/* 요구사항(2026-09-10 사용자 요청: "검색 결과에
                       키워드/수량을 꼭 함께 넣어줘. 이게 가장 중요해. 이걸
                       한눈에 보고 해당 업체에 연락을 하려는게 이 싸이트의
