@@ -1086,8 +1086,17 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                 surroundingText: `사용자지정 키워드 매칭: ${actualKeywords}`,
               };
 
-              const secondaryAttachments = collectAttachments(detail);
-              let downloadedAny = false;
+              // 요구사항(2026-09-18 사용자 지적: "조건2번째로 검색된 이곳에서 같은곳이
+              // 3개야. 같은곳이 없도록 해야지"): 이전에는 첨부파일마다 매번 별도의
+              // 행을 만들어 넣어서(매칭 키워드·내용이 모두 "사용자지정"으로 동일한데도)
+              // 같은 공고가 첨부파일 개수만큼 화면에 중복으로 나왔다. 첨부파일은
+              // 전부 내려받아 보관은 하되(요구사항: 열람/메일 첨부용), 목록에는 공고당
+              // 한 행만 남긴다 — 우선순위 첨부파일(isPriorityAttachment, 1차 매칭과
+              // 동일 기준)을 대표로 삼는다.
+              const secondaryAttachments = collectAttachments(detail).sort(
+                (a, b) => Number(isPriorityAttachment(b.name)) - Number(isPriorityAttachment(a.name)),
+              );
+              let primaryAttachment: { matchedFileName: string; storedRelPath: string } | null = null;
               if (secondaryAttachments.length > 0) {
                 const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-secondary-"));
                 try {
@@ -1111,22 +1120,11 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                     await mkdir(storedDir, { recursive: true });
                     const storedPath = path.join(storedDir, path.basename(downloadedPath));
                     await copyFile(downloadedPath, storedPath).catch(() => {});
-                    try {
-                      const inserted = await db
-                        .insert(awardedMatchesTable)
-                        .values({
-                          ...baseValues,
-                          attachmentFileName: matchedFileName,
-                          attachmentStoredPath: path.relative(SCAN_ROOT, storedPath),
-                        })
-                        .onConflictDoNothing()
-                        .returning({ id: awardedMatchesTable.id });
-                      if (inserted.length > 0) {
-                        matchesFound += 1;
-                        downloadedAny = true;
-                      }
-                    } catch (error) {
-                      logger.warn({ err: error, noticeNumber }, "일별 스캔: 사용자지정 조건 매칭 결과 저장 실패");
+                    if (!primaryAttachment) {
+                      primaryAttachment = {
+                        matchedFileName,
+                        storedRelPath: path.relative(SCAN_ROOT, storedPath),
+                      };
                     }
                   }
                 } finally {
@@ -1138,17 +1136,19 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               // 공고 자체는 목록에서 빠지면 안 되므로 파일 없는 행으로라도 남긴다.
               // NULL은 유니크 인덱스에서 서로 다른 값으로 취급되어 재실행 시
               // 중복 삽입될 수 있어, 빈 문자열로 채운다(dedupe가 정상 동작하도록).
-              if (!downloadedAny) {
-                try {
-                  const inserted = await db
-                    .insert(awardedMatchesTable)
-                    .values({ ...baseValues, attachmentFileName: "" })
-                    .onConflictDoNothing()
-                    .returning({ id: awardedMatchesTable.id });
-                  if (inserted.length > 0) matchesFound += 1;
-                } catch (error) {
-                  logger.warn({ err: error, noticeNumber }, "일별 스캔: 사용자지정 조건 매칭 결과 저장 실패");
-                }
+              try {
+                const inserted = await db
+                  .insert(awardedMatchesTable)
+                  .values({
+                    ...baseValues,
+                    attachmentFileName: primaryAttachment?.matchedFileName ?? "",
+                    attachmentStoredPath: primaryAttachment?.storedRelPath,
+                  })
+                  .onConflictDoNothing()
+                  .returning({ id: awardedMatchesTable.id });
+                if (inserted.length > 0) matchesFound += 1;
+              } catch (error) {
+                logger.warn({ err: error, noticeNumber }, "일별 스캔: 사용자지정 조건 매칭 결과 저장 실패");
               }
             }
           }
