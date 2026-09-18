@@ -7,15 +7,26 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { adminUsersTable } from "./admin-users";
 import { dailyScanRunsTable } from "./daily-scan-runs";
 
 // One row per (notice, matched keyword, attachment) hit found by the daily
 // scan. This is the cumulative, ever-growing list shown on the "누적 결과"
 // screen and downloadable as Excel — the actual sales-lead list.
+//
+// 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
+// 야. msjbro에는 admin 의 모든 정보를 공유하지않아... 두 아이디로 입력은
+// 서로 영향을 미치지 않아"): 어느 계정이 찾은 리드인지를 scanRunId를 거친
+// 조인 없이도 바로 걸러낼 수 있도록 adminUserId를 직접 갖는다. 아래 유니크
+// 인덱스에도 포함시켜, 두 계정이 우연히 같은 키워드 설정으로 같은 공고를
+// 각자 찾아내도 서로의 결과를 가리지 않고 독립적으로 남도록 한다.
 export const awardedMatchesTable = pgTable(
   "awarded_matches",
   {
     id: serial("id").primaryKey(),
+    adminUserId: integer("admin_user_id")
+      .notNull()
+      .references(() => adminUsersTable.id, { onDelete: "cascade" }),
     scanRunId: integer("scan_run_id").references(() => dailyScanRunsTable.id),
     noticeNumber: text("notice_number").notNull(),
     noticeName: text("notice_name"),
@@ -60,6 +71,7 @@ export const awardedMatchesTable = pgTable(
     // attachment / different matched keyword), but the exact same hit should
     // never be inserted twice across scan reruns.
     uniqueIndex("awarded_matches_unique_hit").on(
+      table.adminUserId,
       table.source,
       table.noticeNumber,
       table.matchedKeyword,
