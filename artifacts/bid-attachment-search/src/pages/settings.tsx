@@ -488,15 +488,17 @@ export default function Settings() {
           />
           <div className="space-y-4 rounded-lg border p-4">
             <TagEditor
-              label="2차 키워드 (선택 — 공고 제목 + 낙찰금액만으로 매칭)"
+              label='사용자지정 키워드 (선택 — 공고 제목 + 낙찰금액만으로 매칭)'
               description={
-                '여기 등록한 키워드 중 하나라도 공고 제목에 있고, 아래 "낙찰금액" 범위 안이면 위 "검색 키워드"(1차)가 ' +
-                "없어도, 업무구분/추정가격/최소 공사 규모/첨부파일 존재 여부와 상관없이 곧바로 리드로 등록합니다. " +
-                "비워두면 이 조건은 사용하지 않습니다."
+                '여기 등록한 키워드 중 하나라도(OR) 공고 제목에 있고, 아래 "낙찰금액" 범위 안이면 위 "검색 키워드"(1차, ' +
+                '첨부파일 내용 검색)가 없어도, 업무구분/추정가격/최소 공사 규모와 상관없이 곧바로 리드로 등록합니다. ' +
+                '결과 목록·메일에는 실제 매칭된 키워드 대신 "사용자지정"으로 표시되고, 해당 공고의 첨부파일은 ' +
+                "(내용 검색 없이) 전부 내려받아 함께 첨부합니다. 비워두면 이 조건은 사용하지 않습니다. " +
+                "권장: 낙찰금액 최소를 1,000,000,000(10억)으로 설정."
               }
               values={secondaryKeywords}
               onChange={setSecondaryKeywords}
-              emptyHint="비어 있으면 2차 조건을 사용하지 않습니다."
+              emptyHint="비어 있으면 사용자지정 조건을 사용하지 않습니다."
             />
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -505,7 +507,7 @@ export default function Settings() {
                   id="secondaryMinAwardAmount"
                   type="number"
                   min={0}
-                  placeholder="제한 없음"
+                  placeholder="제한 없음 (권장: 1000000000 = 10억)"
                   value={secondaryMinAwardAmount}
                   onChange={(event) => setSecondaryMinAwardAmount(event.target.value)}
                 />
@@ -523,7 +525,8 @@ export default function Settings() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              LH는 실제 낙찰금액을 제공하지 않아, LH 공고에는 이 범위를 기초금액(예산)과 비교합니다.
+              LH는 실제 낙찰금액을 제공하지 않아, LH 공고에는 이 범위를 기초금액(예산)과 비교합니다. LH는 첨부파일
+              다운로드 링크를 제공하지 않아 제목 매칭만으로 리드를 남기고 첨부파일은 붙지 않습니다.
             </p>
           </div>
 
