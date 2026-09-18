@@ -734,10 +734,19 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
 
         // 요구사항(2026-09-15 사용자 요청: "키워드 2번째를 설정할 수 있도록
         // 해줘. 낙찰금액과 공사제목만 넣으면 첫번째 키워드가 없어도 검색되게
-        // 하는거야"): 아래 1차 파이프라인(예산/추정가격/공종/첨부파일 키워드)과
-        // 완전히 독립된 2차 조건. 공고 제목에 2차 키워드가 있고 낙찰금액이
-        // 지정한 범위 안이면, 아래 필터들과 무관하게 그 자체로 리드 등록한다.
-        // 첨부파일을 보지 않으므로(=수량 확인 불가) quantityText는 비워둔다.
+        // 하는거야" / 2026-09-18 사용자 요청: "10억 이상 낙찰 공사건중
+        // 사용자가 입력하는 키워드가 있으면 '사용자지정' 이라는 이름으로
+        // 키워드를 검색해서 똑같이 list up 해줘. 공사 제목에 들어가 있는
+        // 키워드는 or 개념으로 하고 첨부파일은 모두 해줘"): 아래 1차
+        // 파이프라인(예산/추정가격/공종/첨부파일 키워드 검색)과 완전히 독립된
+        // 2차 조건("사용자지정"). 공고 제목에 사용자가 등록한 키워드 중
+        // 하나라도(OR) 있고 낙찰금액이 지정한 범위(권장: 10억 이상) 안이면,
+        // 아래 필터들과 무관하게 그 자체로 리드 등록한다. 화면/메일에는 실제
+        // 매칭된 키워드가 아니라 통일된 라벨 "사용자지정"으로 표시하고(어떤
+        // 키워드였는지는 surroundingText에만 남겨 추적용으로 보존), 첨부파일
+        // 내용은 검색하지 않지만(제목만으로 이미 매칭 확정) 해당 공고의
+        // 첨부파일은 전부 내려받아 1차 매칭과 동일하게 보관/열람/메일 첨부가
+        // 되게 한다.
         if (settings.secondaryKeywords.length > 0) {
           const secondaryAwardAmount = Number(award.sucsfbidAmt ?? 0) || null;
           const inSecondaryRange =
@@ -750,36 +759,89 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
             ];
             const secondaryMatches = searchSegments(secondaryTitleSegments, settings.secondaryKeywords);
             for (const match of secondaryMatches) {
-              const matchedKeyword = match.foundKeywords[0] ?? settings.secondaryKeywords[0] ?? "";
+              const actualKeywords = match.foundKeywords.join(", ");
               const secondaryBudgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0) || null;
               const secondaryEstimatedAmount = Number(detail.presmptPrce ?? 0) || null;
-              try {
-                const inserted = await db
-                  .insert(awardedMatchesTable)
-                  .values({
-                    scanRunId: run.id,
-                    noticeNumber,
-                    noticeName: String(detail.bidNtceNm ?? "").trim() || null,
-                    siteName: String(detail.bidNtceNm ?? "").trim() || null,
-                    workCategory: source,
-                    demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
-                    bidderName: String(award.bidwinnrNm ?? "").trim() || null,
-                    bidderBizno: String(award.bidwinnrBizno ?? "").trim() || null,
-                    budgetAmount: secondaryBudgetAmount,
-                    estimatedAmount: secondaryEstimatedAmount,
-                    awardAmount: secondaryAwardAmount,
-                    awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
-                    matchedKeyword,
-                    // NULL은 유니크 인덱스에서 서로 다른 값으로 취급되어 재실행
-                    // 시 중복 삽입될 수 있어, 첨부파일이 없는 2차 조건 매칭은
-                    // LH와 동일하게 빈 문자열로 채운다(dedupe가 정상 동작하도록).
-                    attachmentFileName: "",
-                  })
-                  .onConflictDoNothing()
-                  .returning({ id: awardedMatchesTable.id });
-                if (inserted.length > 0) matchesFound += 1;
-              } catch (error) {
-                logger.warn({ err: error, noticeNumber }, "일별 스캔: 2차 조건 매칭 결과 저장 실패");
+              const baseValues = {
+                scanRunId: run.id,
+                noticeNumber,
+                noticeName: String(detail.bidNtceNm ?? "").trim() || null,
+                siteName: String(detail.bidNtceNm ?? "").trim() || null,
+                workCategory: source,
+                demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
+                bidderName: String(award.bidwinnrNm ?? "").trim() || null,
+                bidderBizno: String(award.bidwinnrBizno ?? "").trim() || null,
+                budgetAmount: secondaryBudgetAmount,
+                estimatedAmount: secondaryEstimatedAmount,
+                awardAmount: secondaryAwardAmount,
+                awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
+                matchedKeyword: "사용자지정",
+                surroundingText: `사용자지정 키워드 매칭: ${actualKeywords}`,
+              };
+
+              const secondaryAttachments = collectAttachments(detail);
+              let downloadedAny = false;
+              if (secondaryAttachments.length > 0) {
+                const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-secondary-"));
+                try {
+                  for (const attachment of secondaryAttachments) {
+                    let downloadedPath: string;
+                    try {
+                      const download = await withRetry(
+                        () => downloadAttachment(attachment.url, scratchDir, attachment.name),
+                        3,
+                      );
+                      downloadedPath = download.value;
+                    } catch (error) {
+                      logger.warn(
+                        { err: error, noticeNumber, fileName: attachment.name },
+                        "일별 스캔: 사용자지정 조건 첨부파일 다운로드 실패",
+                      );
+                      continue;
+                    }
+                    const matchedFileName = sanitizeName(attachment.name);
+                    const storedDir = path.join(SCAN_ROOT, noticeNumber);
+                    await mkdir(storedDir, { recursive: true });
+                    const storedPath = path.join(storedDir, path.basename(downloadedPath));
+                    await copyFile(downloadedPath, storedPath).catch(() => {});
+                    try {
+                      const inserted = await db
+                        .insert(awardedMatchesTable)
+                        .values({
+                          ...baseValues,
+                          attachmentFileName: matchedFileName,
+                          attachmentStoredPath: path.relative(SCAN_ROOT, storedPath),
+                        })
+                        .onConflictDoNothing()
+                        .returning({ id: awardedMatchesTable.id });
+                      if (inserted.length > 0) {
+                        matchesFound += 1;
+                        downloadedAny = true;
+                      }
+                    } catch (error) {
+                      logger.warn({ err: error, noticeNumber }, "일별 스캔: 사용자지정 조건 매칭 결과 저장 실패");
+                    }
+                  }
+                } finally {
+                  await rm(scratchDir, { recursive: true, force: true });
+                }
+              }
+
+              // 첨부파일이 아예 없거나 전부 다운로드에 실패해도, 조건에 맞는
+              // 공고 자체는 목록에서 빠지면 안 되므로 파일 없는 행으로라도 남긴다.
+              // NULL은 유니크 인덱스에서 서로 다른 값으로 취급되어 재실행 시
+              // 중복 삽입될 수 있어, 빈 문자열로 채운다(dedupe가 정상 동작하도록).
+              if (!downloadedAny) {
+                try {
+                  const inserted = await db
+                    .insert(awardedMatchesTable)
+                    .values({ ...baseValues, attachmentFileName: "" })
+                    .onConflictDoNothing()
+                    .returning({ id: awardedMatchesTable.id });
+                  if (inserted.length > 0) matchesFound += 1;
+                } catch (error) {
+                  logger.warn({ err: error, noticeNumber }, "일별 스캔: 사용자지정 조건 매칭 결과 저장 실패");
+                }
               }
             }
           }
@@ -1028,10 +1090,12 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           candidatesChecked += 1;
 
           // 요구사항(2026-09-15 사용자 요청: 2차 키워드 — 낙찰금액과 공사제목만
-          // 넣으면 1차 키워드가 없어도 검색): 나라장터와 동일한 2차 조건.
-          // LH는 실제 낙찰금액(sucsfbidAmt에 해당하는 필드)을 제공하지 않아
-          // (lh-source.ts 상단 주석 참고) 기초금액(fdmtlAmt, 예산)을 대신
-          // 비교 기준으로 쓴다.
+          // 넣으면 1차 키워드가 없어도 검색 / 2026-09-18 사용자 요청: "사용자지정"
+          // 라벨 통일): 나라장터와 동일한 "사용자지정" 조건. LH는 실제
+          // 낙찰금액(sucsfbidAmt에 해당하는 필드)을 제공하지 않아(lh-source.ts
+          // 상단 주석 참고) 기초금액(fdmtlAmt, 예산)을 대신 비교 기준으로 쓴다.
+          // LH는 첨부파일 다운로드 링크 자체를 제공하지 않으므로(위 LH 낙찰
+          // 검색과 동일) 첨부파일 없이 제목 매칭만으로 리드를 남긴다.
           if (settings.secondaryKeywords.length > 0) {
             const secondaryProxyAmount = award.fdmtlAmt;
             const inSecondaryRange =
@@ -1045,7 +1109,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               const secondaryMatches = searchSegments(secondaryTitleSegments, settings.secondaryKeywords);
               const secondaryNoticeNumber = `LH-${award.bidNum}-${award.bidDegree}`;
               for (const match of secondaryMatches) {
-                const matchedKeyword = match.foundKeywords[0] ?? settings.secondaryKeywords[0] ?? "";
+                const actualKeywords = match.foundKeywords.join(", ");
                 try {
                   const inserted = await db
                     .insert(awardedMatchesTable)
@@ -1060,14 +1124,15 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                       budgetAmount: award.fdmtlAmt,
                       estimatedAmount: award.presmtPrc,
                       awardDate: award.openDateKey ?? dateKey,
-                      matchedKeyword,
+                      matchedKeyword: "사용자지정",
+                      surroundingText: `사용자지정 키워드 매칭: ${actualKeywords}`,
                       attachmentFileName: "",
                     })
                     .onConflictDoNothing()
                     .returning({ id: awardedMatchesTable.id });
                   if (inserted.length > 0) matchesFound += 1;
                 } catch (error) {
-                  logger.warn({ err: error, noticeNumber: secondaryNoticeNumber }, "일별 스캔: LH 2차 조건 매칭 결과 저장 실패");
+                  logger.warn({ err: error, noticeNumber: secondaryNoticeNumber }, "일별 스캔: LH 사용자지정 조건 매칭 결과 저장 실패");
                 }
               }
             }
