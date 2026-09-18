@@ -1049,22 +1049,26 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
 
             // 요구사항(2026-09-18 사용자 요청: "주소는 현장주소를 1번으로 하고
             // 클릭하면 사업자 주소가 나오게 해줘. 현장주소가 가장 중요해.
-            // 첨부파일이나 파일을 검색해서 현장주소 DATA를 꼭 찾아줘") 현장주소
-            // 재검색: "현장위치:" 같은 라벨이 있으면 최우선으로 쓰고
-            // (extractSiteAddress), 없으면 라벨 없이도 공고제목이나 첨부파일
-            // 본문에 섞여 나오는 주소 패턴 자체를 찾는다(extractGeneralAddress) —
-            // 공고제목을 첨부파일 본문보다 먼저 보는 이유는 발주기관이 직접 적은
-            // 제목이 첨부파일 안의 다른 주소(예: 관련 없는 참고현장)보다 신뢰도가
-            // 높기 때문. 이제는 이 공고의 첨부파일 전체(allAttachmentText, 위
-            // attachments 루프에서 키워드 매칭 여부와 무관하게 누적)를 대상으로
-            // 검색하므로, "현장위치:" 라벨이 키워드가 매칭된 줄이 아니라 다른
-            // 줄/다른 첨부파일(시방서·현장설명서 등)에 있어도 찾을 수 있다. 그래도
-            // 못 찾으면 마지막으로 공사현장지역명(cnstrtsiteRgnNm, 구 단위까지만
+            // 첨부파일이나 파일을 검색해서 현장주소 DATA를 꼭 찾아줘" / 같은 날
+            // 재지적: "보통 공사 제목에 들어가 있잖아. 그걸 토대로 현장주소를
+            // 찾아줘"): 발주기관이 공고 제목(bidNtceNm)에 "OO공사(전라남도
+            // 여수시 소라면)"처럼 현장 소재지를 직접 적어두는 경우가 흔하고, 이
+            // 값은 발주기관이 직접 쓴 것이라 첨부파일 속 다른 언급(예: 관련 없는
+            // 참고현장, 협력업체 주소 등)보다 신뢰도가 높다 — 그래서 공고 제목의
+            // 주소 패턴(extractGeneralAddress)을 최우선으로 시도한다. 제목에
+            // 없으면 첨부파일에서 "현장위치:" 같은 명시적 라벨을 찾고
+            // (extractSiteAddress), 그래도 없으면 라벨 없이 첨부파일 본문에
+            // 섞여 나오는 주소 패턴 자체를 찾는다(extractGeneralAddress). 첨부파일
+            // 쪽은 이 공고의 첨부파일 전체(allAttachmentText, 위 attachments
+            // 루프에서 키워드 매칭 여부와 무관하게 누적)를 대상으로 검색하므로,
+            // "현장위치:" 라벨이 키워드가 매칭된 줄이 아니라 다른 줄/다른
+            // 첨부파일(시방서·현장설명서 등)에 있어도 찾을 수 있다. 그래도 못
+            // 찾으면 마지막으로 공사현장지역명(cnstrtsiteRgnNm, 구 단위까지만
             // 나오는 API 필드)으로 대체한다 — bidderAddress(낙찰자 사업자 소재지)
             // 와는 다른 값이다.
             const resolvedSiteAddress =
-              extractSiteAddress(allAttachmentText) ??
               extractGeneralAddress(String(detail.bidNtceNm ?? "")) ??
+              extractSiteAddress(allAttachmentText) ??
               extractGeneralAddress(allAttachmentText) ??
               (String(detail.cnstrtsiteRgnNm ?? "").trim() || null);
             for (const row of finalInserts) {
