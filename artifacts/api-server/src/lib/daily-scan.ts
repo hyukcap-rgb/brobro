@@ -833,6 +833,19 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           unit: string | null;
         }[] = [];
 
+        // 요구사항(2026-09-18 사용자 요청: "주소는 현장주소를 1번으로 하고
+        // 클릭하면 사업자 주소가 나오게 해줘. 현장주소가 가장 중요해.
+        // 첨부파일이나 파일을 검색해서 현장주소 DATA를 꼭 찾아줘"): 예전에는
+        // 키워드가 매칭된 그 줄 주변 텍스트(surroundingText)에서만 현장주소를
+        // 찾아서, "현장위치:" 같은 문구가 다른 줄이나 다른 첨부파일(시방서·
+        // 현장설명서 등)에 있으면 놓치는 경우가 많았다. 이 공고의 첨부파일을
+        // 전부 훑으며(아래 attachments 루프) 키워드 매칭 여부와 무관하게 전체
+        // 텍스트를 여기 모아뒀다가, 루프가 끝난 뒤 문서 전체에서 현장주소를
+        // 찾는다(아래 "현장주소 재검색" 참고). 드물게 첨부파일이 아주 크더라도
+        // 메모리를 과하게 쓰지 않도록 누적 길이를 제한한다.
+        let allAttachmentText = "";
+        const ATTACHMENT_TEXT_CAP = 300_000;
+
         const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-"));
         try {
           for (const attachment of attachments) {
@@ -876,6 +889,17 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                 );
                 continue;
               }
+
+              // 요구사항(2026-09-18: 현장주소 재검색) 계속: 키워드 매칭 여부와 무관하게
+              // 이 첨부파일에서 추출된 텍스트 전체를 누적한다 — "현장위치:" 같은 라벨이
+              // 키워드가 매칭된 행이 아니라 전혀 다른 행/첨부파일(시방서·현장설명서 등)에
+              // 있는 경우가 많아서다. ATTACHMENT_TEXT_CAP을 넘으면 더 이상 추가하지
+              // 않는다(대용량 첨부파일이 여러 개라도 메모리를 무한정 쓰지 않도록).
+              if (allAttachmentText.length < ATTACHMENT_TEXT_CAP) {
+                const segmentText = segments.map((s) => s.itemContext ?? s.text).join("\n");
+                allAttachmentText = `${allAttachmentText}\n${segmentText}`.slice(0, ATTACHMENT_TEXT_CAP);
+              }
+
               // 요구사항 4: 설정된 키워드(=선택한 품목, 기본 "부직포")가 있는 공고만.
               const matches = searchSegments(segments, settings.matchKeywords);
               logger.info(
@@ -927,24 +951,13 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                   guessSiteOffice(match.originalText) ??
                   (detail.dminsttNm ? `${String(detail.dminsttNm)} (발주기관 문의)` : null);
 
-                // 요구사항(2026-09-12: 주소를 사업자주소 대신 실제 공사현장으로 /
-                // 2026-09-13 사용자 지적: "이미 계속 주소 미확인으로 나오고
-                // 있어. 보통 공고제목이나 글 내용에 공사현장 주소가
-                // 나와있거든"): "현장위치:" 같은 라벨이 있으면 최우선으로 쓰고
-                // (extractSiteAddress), 없으면 라벨 없이도 공고제목이나
-                // 첨부파일 본문에 섞여 나오는 주소 패턴 자체를 찾는다
-                // (extractGeneralAddress) — 공고제목을 첨부파일 본문보다 먼저
-                // 보는 이유는 발주기관이 직접 적은 제목이 첨부파일 안의 다른
-                // 주소(예: 관련 없는 참고현장)보다 신뢰도가 높기 때문. 그래도
-                // 못 찾으면 마지막으로 공사현장지역명(cnstrtsiteRgnNm, 구
-                // 단위까지만 나오는 API 필드)으로 대체한다 — bidderAddress
-                // (아래, 낙찰자 사업자 소재지)와는 다른 값이다.
-                const attachmentText = `${match.surroundingText}\n${match.originalText}`;
-                const siteAddress =
-                  extractSiteAddress(attachmentText) ??
-                  extractGeneralAddress(String(detail.bidNtceNm ?? "")) ??
-                  extractGeneralAddress(attachmentText) ??
-                  (String(detail.cnstrtsiteRgnNm ?? "").trim() || null);
+                // 요구사항(2026-09-18: 현장주소 재검색) 계속: 예전에는 여기서
+                // match.surroundingText/originalText(키워드가 매칭된 그 줄 주변)만
+                // 보고 현장주소를 찾았다. 이제는 첨부파일 전체를 모은
+                // allAttachmentText를 attachments 루프가 다 끝난 뒤 한 번에 검색해서
+                // (finalInserts를 만드는 아래쪽 블록 참고) 문서 어디에 있든 찾을 수
+                // 있게 한다 — 여기서는 자리만 null로 잡아두고 나중에 채운다.
+                const siteAddress: string | null = null;
 
                 // 요구사항 7, 8: 낙찰자 연락처/주소 — 정부 기록에 없으면 첨부파일,
                 // 그래도 없으면 네이버 API로 보완.
@@ -1033,6 +1046,31 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
             // 리드가 남는 경우에만 "1차 키워드 있음"으로 표시해 "사용자지정"(2차
             // 키워드) 조건이 중복 적용되지 않게 한다.
             primaryMatchedAny = true;
+
+            // 요구사항(2026-09-18 사용자 요청: "주소는 현장주소를 1번으로 하고
+            // 클릭하면 사업자 주소가 나오게 해줘. 현장주소가 가장 중요해.
+            // 첨부파일이나 파일을 검색해서 현장주소 DATA를 꼭 찾아줘") 현장주소
+            // 재검색: "현장위치:" 같은 라벨이 있으면 최우선으로 쓰고
+            // (extractSiteAddress), 없으면 라벨 없이도 공고제목이나 첨부파일
+            // 본문에 섞여 나오는 주소 패턴 자체를 찾는다(extractGeneralAddress) —
+            // 공고제목을 첨부파일 본문보다 먼저 보는 이유는 발주기관이 직접 적은
+            // 제목이 첨부파일 안의 다른 주소(예: 관련 없는 참고현장)보다 신뢰도가
+            // 높기 때문. 이제는 이 공고의 첨부파일 전체(allAttachmentText, 위
+            // attachments 루프에서 키워드 매칭 여부와 무관하게 누적)를 대상으로
+            // 검색하므로, "현장위치:" 라벨이 키워드가 매칭된 줄이 아니라 다른
+            // 줄/다른 첨부파일(시방서·현장설명서 등)에 있어도 찾을 수 있다. 그래도
+            // 못 찾으면 마지막으로 공사현장지역명(cnstrtsiteRgnNm, 구 단위까지만
+            // 나오는 API 필드)으로 대체한다 — bidderAddress(낙찰자 사업자 소재지)
+            // 와는 다른 값이다.
+            const resolvedSiteAddress =
+              extractSiteAddress(allAttachmentText) ??
+              extractGeneralAddress(String(detail.bidNtceNm ?? "")) ??
+              extractGeneralAddress(allAttachmentText) ??
+              (String(detail.cnstrtsiteRgnNm ?? "").trim() || null);
+            for (const row of finalInserts) {
+              row.values.siteAddress = resolvedSiteAddress;
+            }
+
             for (const row of finalInserts) {
               try {
                 const inserted = await db
