@@ -22,7 +22,7 @@ router.get("/scans", async (req, res) => {
   const params = ListScansQueryParams.safeParse(req.query);
   const limit = params.success ? params.data.limit : undefined;
   const offset = params.success ? params.data.offset : undefined;
-  const { scans, total } = await listScanRuns(limit, offset);
+  const { scans, total } = await listScanRuns(req.session.userId!, limit, offset);
   res.json({ scans: scans.map(serializeRun), total });
 });
 
@@ -30,8 +30,8 @@ router.get("/scans", async (req, res) => {
 // 삭제해줘"): 배포 확인용으로 수동 실행했던 스캔 기록 + 그로 인한 매칭 결과를
 // 한 번에 정리하는 일회성 전체 삭제. 화면 버튼은 만들지 않고 관리자가 필요할
 // 때 직접 호출한다.
-router.delete("/scans", async (_req, res) => {
-  const result = await deleteAllScanData();
+router.delete("/scans", async (req, res) => {
+  const result = await deleteAllScanData(req.session.userId!);
   res.json(result);
 });
 
@@ -41,7 +41,7 @@ router.get("/scans/:id", async (req, res) => {
     res.status(404).json({ error: "실행 기록을 찾을 수 없습니다." });
     return;
   }
-  const run = await getScanRun(params.data.id);
+  const run = await getScanRun(req.session.userId!, params.data.id);
   if (!run) {
     res.status(404).json({ error: "실행 기록을 찾을 수 없습니다." });
     return;
@@ -89,7 +89,7 @@ router.post("/scans/run", async (req, res) => {
     explicitRange = { start: startDate, end: rangeEnd };
   }
   try {
-    const run = await createPendingScanRun("manual", explicitRange);
+    const run = await createPendingScanRun("manual", req.session.userId!, explicitRange);
     // 요구사항(2026-09-11 사용자 재지적: "모든 검색의 기준은 낙찰일이란
     // 말이야 — 낙찰 된 건 >> 키워드가 있는 건, 이 순서대로 하란말이야"):
     // "지금 실행"과 "이 기간으로 검색" 모두 낙찰일(fnlSucsfDate) 기준으로
