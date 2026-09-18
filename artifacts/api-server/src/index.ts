@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { ensureAdminSeeded } from "./lib/auth";
+import { ensureAdminSeeded, ensureExtraAdminSeeded } from "./lib/auth";
 import { startDailyScanScheduler, startAttachmentCleanupScheduler } from "./lib/scheduler";
 import { recoverOrphanedScanRuns } from "./lib/daily-scan";
 import { sendTestEmail } from "./lib/mailer";
@@ -110,6 +110,7 @@ if (Number.isNaN(port) || port <= 0) {
 
 ensureSchema()
   .then(() => ensureAdminSeeded())
+  .then(() => ensureExtraAdminSeeded())
   .then(() => recoverOrphanedScanRuns())
   .then(() => startDailyScanScheduler())
   .then(() => startAttachmentCleanupScheduler())
