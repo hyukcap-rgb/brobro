@@ -516,8 +516,17 @@ export default function Matches() {
               지저분했다. table-fixed로 바꾸고 각 컬럼에 고정 폭을 직접
               지정해, 컬럼 폭이 항상 예측 가능하고 정돈되게 하며 — 각 셀은
               그 고정 폭 안에서 truncate(말줄임표)로 잘리게 한다. */}
+              {/* 요구사항(2026-09-18 사용자 재지적: "좌우스크롤이 없어서 글자가
+              다 강제로 줄여지네. 좌우 스크롤을 만들어주고 칸을 넓혀서 내용을
+              정확히 볼 수 있도록 해줘"): table-fixed와 w-full을 같이 쓰면(shadcn
+              Table 기본 클래스가 w-full) table-layout:fixed라도 컬럼 폭 지정은
+              "테이블 전체 폭(=컨테이너 100%) 안에서의 비율"로만 작동해, 좁은
+              화면에서는 스크롤 없이 글자가 계속 눌려 보였다. 테이블 자체 폭을
+              각 컬럼 폭의 합(=1535px)으로 명시해 컨테이너보다 넓게 만들면,
+              Table 컴포넌트의 overflow-auto 컨테이너가 그때부터 실제로 좌우
+              스크롤을 만들어주고, 각 컬럼은 지정한 폭 그대로 유지된다. */}
               <div className="rounded-md border">
-                <Table className="text-xs table-fixed" containerClassName="max-h-[65vh]">
+                <Table className="text-xs table-fixed w-[1535px]" containerClassName="max-h-[65vh]">
                   <TableHeader className="sticky top-0 z-10 bg-background shadow-[0_1px_0_0_hsl(var(--border))]">
                     <TableRow>
                       <TableHead className="px-2 w-[140px]">공고번호</TableHead>
@@ -533,9 +542,9 @@ export default function Matches() {
                       {/* 요구사항(2026-09-18 사용자 요청: "검색 결과에 공사제목을
                       보여줘. 낙찰일 다음에 낙찰제목을 넣어줘"): 공고명(=공사제목/
                       낙찰제목)을 낙찰일 바로 다음 컬럼에 보여준다. */}
-                      <TableHead className="px-2 w-[200px]">공사제목</TableHead>
-                      <TableHead className="px-2 w-[110px]">키워드 · 수량</TableHead>
-                      <TableHead className="px-2 w-[110px]">
+                      <TableHead className="px-2 w-[320px]">공사제목</TableHead>
+                      <TableHead className="px-2 w-[130px]">키워드 · 수량</TableHead>
+                      <TableHead className="px-2 w-[160px]">
                         <button
                           type="button"
                           onClick={() => toggleSort("bidderName")}
@@ -544,7 +553,7 @@ export default function Matches() {
                           낙찰자 {sortIndicator("bidderName")}
                         </button>
                       </TableHead>
-                      <TableHead className="px-2 w-[140px]">
+                      <TableHead className="px-2 w-[150px]">
                         <button
                           type="button"
                           onClick={() => toggleSort("budgetAmount")}
@@ -558,9 +567,9 @@ export default function Matches() {
                       실제 공사현장 주소를 둘 다 보여준다 — 다만 현장 주소가
                       제공되지 않는 경우가 대부분이라(2026-09-15 UX 리뷰), 별도
                       컬럼 대신 클릭하면 둘 다 보여주는 팝오버 하나로 합친다. */}
-                      <TableHead className="px-2 w-[130px]">주소</TableHead>
-                      <TableHead className="px-2 w-[120px]">연락처</TableHead>
-                      <TableHead className="px-2 w-[130px]">첨부파일</TableHead>
+                      <TableHead className="px-2 w-[220px]">주소</TableHead>
+                      <TableHead className="px-2 w-[130px]">연락처</TableHead>
+                      <TableHead className="px-2 w-[200px]">첨부파일</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
