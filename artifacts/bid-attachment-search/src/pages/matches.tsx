@@ -498,9 +498,17 @@ export default function Matches() {
               커져 가로 스크롤이 생긴다. 셀 여백을 좁히고(px-2), 값이 길어질
               수 있는 낙찰자/연락처는 한 줄 고정 대신 줄바꿈되도록 바꿔서
               전체 폭이 뷰포트 안에 들어오게 한다. */}
-              <div className="overflow-x-auto rounded-md border">
-                <Table className="text-xs">
-                  <TableHeader>
+              {/* 요구사항(2026-09-18 사용자 요청: "검색결과 스크롤 생기게
+              하자"): 표를 감싸는 바깥 div의 overflow-x-auto는 죽은 코드였다 —
+              실제 가로/세로 스크롤은 Table 컴포넌트 내부의 div(w-full
+              overflow-auto)에서 일어나는데, 그 div는 높이가 표의 전체
+              내용만큼(제한 없이) 늘어나 있어서 가로 스크롤바가 맨 아래
+              행까지 스크롤해야만 보였다. Table에 고정 높이(max-h)를 직접
+              주고 헤더를 sticky로 고정해, 표 자체가 스크롤 박스가 되어
+              스크롤바가 항상 바로 보이고 잡히게 한다. */}
+              <div className="rounded-md border">
+                <Table className="text-xs" containerClassName="max-h-[65vh]">
+                  <TableHeader className="sticky top-0 z-10 bg-background shadow-[0_1px_0_0_hsl(var(--border))]">
                     <TableRow>
                       <TableHead className="px-2">공고번호</TableHead>
                       <TableHead className="px-2">
