@@ -3,14 +3,19 @@ import path from "node:path";
 import { createReadStream } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Response } from "express";
-import { count, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { db, awardedMatchesTable, dailyScanRunsTable, type AwardedMatch, type DailyScanRun } from "@workspace/db";
 import { command } from "./bid-processing";
 
-export async function listAwardedMatches(limit = 500): Promise<AwardedMatch[]> {
+// 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
+// 야. msjbro에는 admin 의 모든 정보를 공유하지않아... 두 아이디로 입력은
+// 서로 영향을 미치지 않아"): 이 파일의 모든 조회/삭제는 adminUserId로
+// 걸러서, 로그인한 계정 자신의 리드/스캔 기록만 보고 건드리게 한다.
+export async function listAwardedMatches(adminUserId: number, limit = 500): Promise<AwardedMatch[]> {
   return db
     .select()
     .from(awardedMatchesTable)
+    .where(eq(awardedMatchesTable.adminUserId, adminUserId))
     .orderBy(desc(awardedMatchesTable.createdAt))
     .limit(Math.max(1, Math.min(5000, limit)));
 }
@@ -21,6 +26,7 @@ export async function listAwardedMatches(limit = 500): Promise<AwardedMatch[]> {
 // 이제는 기록을 전부 보존하고, 화면에서 offset/limit으로 페이지를 넘기며 볼
 // 수 있도록 전체 건수(total)도 함께 반환한다.
 export async function listScanRuns(
+  adminUserId: number,
   limit = 60,
   offset = 0,
 ): Promise<{ scans: DailyScanRun[]; total: number }> {
@@ -28,16 +34,26 @@ export async function listScanRuns(
     db
       .select()
       .from(dailyScanRunsTable)
+      .where(eq(dailyScanRunsTable.adminUserId, adminUserId))
       .orderBy(desc(dailyScanRunsTable.startedAt))
       .limit(Math.max(1, Math.min(200, limit)))
       .offset(Math.max(0, offset)),
-    db.select({ value: count() }).from(dailyScanRunsTable),
+    db
+      .select({ value: count() })
+      .from(dailyScanRunsTable)
+      .where(eq(dailyScanRunsTable.adminUserId, adminUserId)),
   ]);
   return { scans, total };
 }
 
-export async function getScanRun(id: number): Promise<DailyScanRun | null> {
-  const [run] = await db.select().from(dailyScanRunsTable).where(eq(dailyScanRunsTable.id, id)).limit(1);
+// adminUserId도 함께 걸러서, 다른 계정의 스캔 실행 id를 추측해 들여다보는
+// 것을 막는다(예: /api/scans/123을 msjbro가 열어도 admin 소유면 404).
+export async function getScanRun(adminUserId: number, id: number): Promise<DailyScanRun | null> {
+  const [run] = await db
+    .select()
+    .from(dailyScanRunsTable)
+    .where(and(eq(dailyScanRunsTable.id, id), eq(dailyScanRunsTable.adminUserId, adminUserId)))
+    .limit(1);
   return run ?? null;
 }
 
@@ -56,10 +72,16 @@ export async function listAwardedMatchesForRun(scanRunId: number): Promise<Award
 // 삭제해줘"): 배포 확인차 수동으로 돌려본 스캔 실행 기록과 그로 인해 저장된
 // 매칭 결과를 한 번에 정리하기 위한 전체 삭제. 실제 운영 데이터가 쌓이기 전,
 // 일회성 초기화 용도이므로 화면에는 버튼을 따로 만들지 않는다.
-export async function deleteAllScanData(): Promise<{ deletedMatches: number; deletedRuns: number }> {
+// 요구사항(2026-09-18: 계정 독립): 이 전체삭제도 다른 계정 데이터까지 함께
+// 지우면 "서로 영향을 미치지 않아야 한다"는 요구를 어기게 되므로, 호출한
+// 계정 소유 데이터만 지운다.
+export async function deleteAllScanData(
+  adminUserId: number,
+): Promise<{ deletedMatches: number; deletedRuns: number }> {
   const matches = await db
     .select({ id: awardedMatchesTable.id, attachmentStoredPath: awardedMatchesTable.attachmentStoredPath })
-    .from(awardedMatchesTable);
+    .from(awardedMatchesTable)
+    .where(eq(awardedMatchesTable.adminUserId, adminUserId));
   const { SCAN_ROOT } = await import("./scan-storage");
   for (const match of matches) {
     if (!match.attachmentStoredPath) continue;
@@ -70,8 +92,14 @@ export async function deleteAllScanData(): Promise<{ deletedMatches: number; del
       // 파일이 이미 없거나 삭제 실패해도 레코드 삭제는 계속 진행한다.
     }
   }
-  const deletedMatches = await db.delete(awardedMatchesTable).returning({ id: awardedMatchesTable.id });
-  const deletedRuns = await db.delete(dailyScanRunsTable).returning({ id: dailyScanRunsTable.id });
+  const deletedMatches = await db
+    .delete(awardedMatchesTable)
+    .where(eq(awardedMatchesTable.adminUserId, adminUserId))
+    .returning({ id: awardedMatchesTable.id });
+  const deletedRuns = await db
+    .delete(dailyScanRunsTable)
+    .where(eq(dailyScanRunsTable.adminUserId, adminUserId))
+    .returning({ id: dailyScanRunsTable.id });
   return { deletedMatches: deletedMatches.length, deletedRuns: deletedRuns.length };
 }
 
@@ -83,7 +111,7 @@ export async function deleteAllScanData(): Promise<{ deletedMatches: number; del
 // (source, noticeNumber) 조합의 "사용자지정" 행이 여러 개면 가장 먼저 저장된
 // 것(id가 가장 작은 것) 하나만 남기고 나머지는 지운다. 관리자가 필요할 때
 // 직접 호출하는 일회성 정리용이라 화면 버튼은 만들지 않는다.
-export async function dedupeSecondaryMatches(): Promise<{ deletedCount: number }> {
+export async function dedupeSecondaryMatches(adminUserId: number): Promise<{ deletedCount: number }> {
   const rows = await db
     .select({
       id: awardedMatchesTable.id,
@@ -91,7 +119,9 @@ export async function dedupeSecondaryMatches(): Promise<{ deletedCount: number }
       noticeNumber: awardedMatchesTable.noticeNumber,
     })
     .from(awardedMatchesTable)
-    .where(eq(awardedMatchesTable.matchedKeyword, "사용자지정"))
+    .where(
+      and(eq(awardedMatchesTable.matchedKeyword, "사용자지정"), eq(awardedMatchesTable.adminUserId, adminUserId)),
+    )
     .orderBy(awardedMatchesTable.id);
 
   const seen = new Set<string>();
