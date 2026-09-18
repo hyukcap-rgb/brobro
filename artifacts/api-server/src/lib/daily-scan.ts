@@ -2,7 +2,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { copyFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { desc, eq } from "drizzle-orm";
-import { db, dailyScanRunsTable, awardedMatchesTable, noticeDetailCacheTable, type DailyScanRun } from "@workspace/db";
+import { db, dailyScanRunsTable, awardedMatchesTable, noticeDetailCacheTable, type DailyScanRun, type InsertAwardedMatch } from "@workspace/db";
 import {
   requestBuffer,
   formatServiceKey,
@@ -819,6 +819,20 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         }
         funnel.reachedAttachmentSearch += 1;
 
+        // 요구사항(2026-09-18 사용자 요청: "검색 결과에서 1,000m2 이하
+        // 하나만 검색되는 공고를 삭제해줘. 무슨뜻이냐 하면 첨부파일에서
+        // 부직포 키워드로 100m2 하나와 10000m2 이렇게 두개가 검색되면 지금처럼
+        // 그대로 보여주고, 1000m2 이하 하나만 검색되면 그 공고는 검색하지
+        // 않아도 된다는 뜻임"): 이 공고(모든 첨부파일 포함)에서 나온 매칭을
+        // 여기 모아뒀다가, 첨부파일을 전부 훑은 뒤에 한 번에 개수/수량을 보고
+        // DB에 넣을지 말지 정한다(아래 attachments 루프 끝 참고). 그 전까지는
+        // DB에 바로 넣지 않는다.
+        const pendingInserts: {
+          values: InsertAwardedMatch;
+          quantityValue: number | null;
+          unit: string | null;
+        }[] = [];
+
         const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-"));
         try {
           for (const attachment of attachments) {
@@ -895,13 +909,18 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                 // 단어 자체는 있어도 수량을 특정할 수 없으면 실제 발주 물량을 알 수
                 // 없는 단순 언급일 가능성이 커서 영업 리드로 만들지 않는다.
                 if (!quantityText) continue;
+                // 요구사항(2026-09-18 사용자 요청: "관급자제 에 키워드가 있는경우
+                // 검색하지 않아도 됨. 키워드가 관급자제 아래 검색하려는 키워드가
+                // 있는경우 삭제 해줘.이건 우리가 영업을 하지 못해"): 관급자재는
+                // 발주기관이 직접 사급(공급)하는 자재라 시공사가 납품 영업을 할 수
+                // 없는 항목이므로, 애초에 리드 후보에도 넣지 않는다.
+                if (match.section === "관급자재") continue;
                 // 요구사항(2026-09-18 사용자 재지적: "키워드가 있는 건 중 금액 설정하는
                 // 방법과 10억이상 공사건 중 키워드가 없는건 중 제목에 새로 지정하는
                 // 키워드가 있는거는 검색해 달라는거야. 키워드와 키워드2 개념이야. 둘은
-                // 달라"): 수량까지 확정된 진짜 1차 키워드 매칭이므로, DB 삽입(dedupe)
-                // 성공 여부와 무관하게 이 공고는 "1차 키워드 있음"으로 표시해 아래
-                // "사용자지정"(2차 키워드) 조건이 중복 적용되지 않게 한다.
-                primaryMatchedAny = true;
+                // 달라"): 수량까지 확정된 진짜 1차 키워드 매칭 "후보"이므로(최종
+                // 리드로 남길지는 아래 attachments 루프가 끝난 뒤 개수/수량 규칙으로
+                // 정한다) 일단 여기서는 아직 primaryMatchedAny를 세우지 않는다.
                 // 요구사항 6: 현장명 / 현장사무소 / 수량.
                 const siteOffice =
                   guessSiteOffice(match.surroundingText) ??
@@ -937,40 +956,93 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                   String(award.bidwinnrBizno ?? "").trim() || null,
                 );
 
-                try {
-                  const inserted = await db
-                    .insert(awardedMatchesTable)
-                    .values({
-                      scanRunId: run.id,
-                      noticeNumber,
-                      noticeName: String(detail.bidNtceNm ?? "").trim() || null,
-                      siteName: String(detail.bidNtceNm ?? "").trim() || null,
-                      siteOffice,
-                      siteAddress,
-                      workTypeName,
-                      workCategory: source,
-                      demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
-                      bidderName: String(award.bidwinnrNm ?? "").trim() || null,
-                      bidderBizno: String(award.bidwinnrBizno ?? "").trim() || null,
-                      bidderAddress,
-                      bidderPhone,
-                      contactSource,
-                      budgetAmount: budgetAmount || null,
-                      estimatedAmount,
-                      awardAmount: Number(award.sucsfbidAmt ?? 0) || null,
-                      awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
-                      matchedKeyword,
-                      quantityText,
-                      surroundingText: match.surroundingText,
-                      attachmentFileName: matchedFileName,
-                      attachmentStoredPath: path.relative(SCAN_ROOT, storedPath),
-                    })
-                    .onConflictDoNothing()
-                    .returning({ id: awardedMatchesTable.id });
-                  if (inserted.length > 0) matchesFound += 1;
-                } catch (error) {
-                  logger.warn({ err: error, noticeNumber }, "일별 스캔: 매칭 결과 저장 실패");
-                }
+                // 요구사항(2026-09-18: 1,000㎡ 이하 단독 매칭 제외 — 아래 attachments
+                // 루프가 끝난 뒤 개수를 보고 최종 판정): DB 삽입은 미루고 후보로만
+                // 쌓아둔다.
+                pendingInserts.push({
+                  values: {
+                    scanRunId: run.id,
+                    noticeNumber,
+                    noticeName: String(detail.bidNtceNm ?? "").trim() || null,
+                    siteName: String(detail.bidNtceNm ?? "").trim() || null,
+                    siteOffice,
+                    siteAddress,
+                    workTypeName,
+                    workCategory: source,
+                    demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
+                    bidderName: String(award.bidwinnrNm ?? "").trim() || null,
+                    bidderBizno: String(award.bidwinnrBizno ?? "").trim() || null,
+                    bidderAddress,
+                    bidderPhone,
+                    contactSource,
+                    budgetAmount: budgetAmount || null,
+                    estimatedAmount,
+                    awardAmount: Number(award.sucsfbidAmt ?? 0) || null,
+                    awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
+                    matchedKeyword,
+                    quantityText,
+                    surroundingText: match.surroundingText,
+                    attachmentFileName: matchedFileName,
+                    attachmentStoredPath: path.relative(SCAN_ROOT, storedPath),
+                  },
+                  quantityValue:
+                    itemFields.itemQuantity && itemFields.itemQuantity !== "미공개/확인불가"
+                      ? Number(itemFields.itemQuantity.replace(/,/g, ""))
+                      : null,
+                  unit:
+                    itemFields.itemUnit && itemFields.itemUnit !== "미공개/확인불가"
+                      ? itemFields.itemUnit
+                      : null,
+                });
+              }
+            }
+          }
+
+          // 요구사항(2026-09-18 사용자 요청: "검색 결과에서 1,000m2 이하 하나만
+          // 검색되는 공고를 삭제해줘. 무슨뜻이냐 하면 첨부파일에서 부직포 키워드로
+          // 100m2 하나와 10000m2 이렇게 두개가 검색되면 지금처럼 그대로 보여주고,
+          // 1000m2 이하 하나만 검색되면 그 공고는 검색하지 않아도 된다는 뜻임"):
+          // 이 공고(모든 첨부파일 통틀어)에서 수량 있는 매칭이 정확히 1건뿐이고,
+          // 그 단위가 면적 단위(㎡/m²/m2/M2)이며 수량이 1,000 이하면 리드로 만들지
+          // 않는다. 2건 이상이면(단위/수량과 무관하게) 기존처럼 전부 보여준다.
+          // "100m2"처럼 소량이 하나만 잡힌 건 실제 발주 물량이라기보다 단순 언급일
+          // 가능성이 높다는 판단(사용자 예시)이라, 판정 기준값(1,000)을 사용자가
+          // 구체적으로 제시한 면적 단위에 한정해서 적용한다 — 개/식/kg/톤처럼 규모
+          // 단위가 전혀 다른 수량까지 같은 "1000 이하"로 재단하면 오히려 정상적인
+          // 리드를 놓칠 수 있어서다.
+          const AREA_UNITS = new Set(["㎡", "m²", "m2", "M2"]);
+          let finalInserts = pendingInserts;
+          if (pendingInserts.length === 1) {
+            const only = pendingInserts[0];
+            if (
+              only.unit &&
+              AREA_UNITS.has(only.unit) &&
+              only.quantityValue != null &&
+              Number.isFinite(only.quantityValue) &&
+              only.quantityValue <= 1000
+            ) {
+              finalInserts = [];
+              logger.info(
+                { noticeNumber, quantityValue: only.quantityValue, unit: only.unit },
+                "일별 스캔: 1,000㎡ 이하 단독 매칭이라 리드 제외",
+              );
+            }
+          }
+          if (finalInserts.length > 0) {
+            // 요구사항(2026-09-18 사용자 재지적, 위 918행 주석 참고): 최종적으로
+            // 리드가 남는 경우에만 "1차 키워드 있음"으로 표시해 "사용자지정"(2차
+            // 키워드) 조건이 중복 적용되지 않게 한다.
+            primaryMatchedAny = true;
+            for (const row of finalInserts) {
+              try {
+                const inserted = await db
+                  .insert(awardedMatchesTable)
+                  .values(row.values)
+                  .onConflictDoNothing()
+                  .returning({ id: awardedMatchesTable.id });
+                if (inserted.length > 0) matchesFound += 1;
+              } catch (error) {
+                logger.warn({ err: error, noticeNumber }, "일별 스캔: 매칭 결과 저장 실패");
               }
             }
           }
