@@ -84,13 +84,25 @@ function toView(row: {
   };
 }
 
-export async function getAppSettings(): Promise<AppSettingsView> {
-  const [existing] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.id, 1)).limit(1);
+// 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
+// 야. msjbro에는 admin 의 모든 정보를 공유하지않아. 독립적인 id 로 작동되는
+// 거야. 두 아이디로 입력은 서로 영향을 미치지 않아"): 예전에는 이 설정이
+// id=1 고정인 단일 행이라 어떤 관리자로 로그인하든 같은 설정을 보고 같은
+// 설정을 바꿨다. 이제 호출부(routes/settings.ts, daily-scan.ts)가 항상
+// req.session.userId(로그인한 관리자 계정)를 넘겨줘야 하고, 그 계정 소유의
+// 설정 행만 읽고 쓴다 — 계정이 다르면 완전히 별도의 키워드·예산·이메일
+// 설정을 갖는다.
+export async function getAppSettings(adminUserId: number): Promise<AppSettingsView> {
+  const [existing] = await db
+    .select()
+    .from(appSettingsTable)
+    .where(eq(appSettingsTable.adminUserId, adminUserId))
+    .limit(1);
   if (existing) return toView(existing);
   const [created] = await db
     .insert(appSettingsTable)
     .values({
-      id: 1,
+      adminUserId,
       matchKeywords: [...DEFAULT_KEYWORDS],
       workTypeKeywords: DEFAULT_WORK_TYPE_KEYWORDS,
       workCategories: DEFAULT_WORK_CATEGORIES,
@@ -103,7 +115,11 @@ export async function getAppSettings(): Promise<AppSettingsView> {
     .returning();
   if (created) return toView(created);
   // Someone else inserted concurrently; read it back.
-  const [row] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.id, 1)).limit(1);
+  const [row] = await db
+    .select()
+    .from(appSettingsTable)
+    .where(eq(appSettingsTable.adminUserId, adminUserId))
+    .limit(1);
   if (!row) throw new Error("설정을 초기화하지 못했습니다.");
   return toView(row);
 }
@@ -122,8 +138,8 @@ export interface UpdateSettingsInput {
   secondaryMaxAwardAmount?: number | null;
 }
 
-export async function updateAppSettings(input: UpdateSettingsInput): Promise<AppSettingsView> {
-  await getAppSettings(); // ensure row exists
+export async function updateAppSettings(adminUserId: number, input: UpdateSettingsInput): Promise<AppSettingsView> {
+  await getAppSettings(adminUserId); // ensure row exists
   const [updated] = await db
     .update(appSettingsTable)
     .set({
@@ -151,7 +167,7 @@ export async function updateAppSettings(input: UpdateSettingsInput): Promise<App
         : {}),
       updatedAt: new Date(),
     })
-    .where(eq(appSettingsTable.id, 1))
+    .where(eq(appSettingsTable.adminUserId, adminUserId))
     .returning();
   if (!updated) throw new Error("설정을 업데이트하지 못했습니다.");
   return toView(updated);
