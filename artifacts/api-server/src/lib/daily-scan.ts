@@ -798,7 +798,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         // 통과한 건"과 "추정가격이 실제로 존재하는 건"을 구분하기 위해 원본 금액
         // 필드를 그대로 남긴다. (사용자가 나라장터 원본 사이트의 "추정가격≥N"
         // 필터 결과와 우리 시스템의 후보 수가 다르다고 지적한 것을 검증하기 위함)
-        logger.info(
+        logger.debug(
           {
             noticeNumber,
             bidNtceNm: detail.bidNtceNm,
@@ -828,7 +828,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           // 원인 진단용 임시 로그: 매칭이 0건인 이유가 "첨부파일 자체가 없어서"인지
           // 아니면 다른 단계(다운로드/텍스트 추출)에서 실패하는지 구분하기 위함.
           funnel.noAttachmentUrl += 1;
-          logger.warn(
+          logger.debug(
             { noticeNumber, source, bidNtceNm: detail.bidNtceNm },
             "일별 스캔[진단]: 공고 상세에 첨부파일 URL이 없음",
           );
@@ -919,7 +919,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
 
               // 요구사항 4: 설정된 키워드(=선택한 품목, 기본 "부직포")가 있는 공고만.
               const matches = searchSegments(segments, settings.matchKeywords);
-              logger.info(
+              logger.debug(
                 {
                   noticeNumber,
                   fileName: path.basename(searchablePath),
