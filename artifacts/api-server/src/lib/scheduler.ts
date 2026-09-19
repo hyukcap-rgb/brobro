@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { db, adminUsersTable } from "@workspace/db";
 import { runDailyScan, ScanAlreadyRunningError } from "./daily-scan";
 import { runAttachmentCleanup } from "./attachment-cleanup";
+import { cleanupOldJobs } from "./bid-processing";
 import { logger } from "./logger";
 import { KST_TIME_ZONE } from "./kr-holidays";
 
@@ -60,6 +61,9 @@ export function startAttachmentCleanupScheduler(): void {
       logger.info("첨부파일 보관기간 만료 자동삭제 시작 (스케줄)");
       runAttachmentCleanup().catch((error) => {
         logger.error({ err: error }, "첨부파일 보관기간 만료 자동삭제 실패 (스케줄)");
+      });
+      cleanupOldJobs().catch((error) => {
+        logger.error({ err: error }, "수동 검색 작업 보관기간 만료 정리 실패 (스케줄)");
       });
     },
     { timezone: KST_TIME_ZONE },
