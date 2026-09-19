@@ -181,6 +181,25 @@ export async function ensureSchema(): Promise<void> {
     -- 요구사항(2026-09-12: 화면 주소를 사업자주소 대신 실제 공사현장으로).
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS site_address TEXT;
 
+    -- 요구사항(2026-09-19 사용자 재지적: "검색결과가 1000m2 이하인 것들도
+    -- 많던데 내가 1000m2 이하는 검색하지 말라고 했잖아"): 위 유니크 인덱스가
+    -- 첨부파일 단위로만 걸려 있어서, 같은 파일 안에서 "부직포"가 여러 줄에
+    -- 걸쳐 여러 번 매칭돼도(예: 87㎡ 한 줄, 263㎡ 다른 줄) 전부 동일한
+    -- 유니크 키를 가져 daily-scan.ts가 "매칭 2건 이상이니 1,000㎡ 이하
+    -- 단독매칭 제외 규칙을 적용하지 않는다"고 정확히 판단해도, 실제로는
+    -- onConflictDoNothing에 의해 그 중 1건만 저장되고 나머지는 조용히
+    -- 사라졌다. surrounding_text(매칭된 줄의 셀/행 위치까지 포함하는 텍스트)를
+    -- 인덱스에 추가해 같은 파일 안의 서로 다른 매칭 줄이 서로 다른 유니크
+    -- 키를 갖게 한다 — schema/awarded-matches.ts 참고.
+    DROP INDEX IF EXISTS awarded_matches_unique_hit;
+    CREATE UNIQUE INDEX IF NOT EXISTS awarded_matches_unique_hit
+      ON awarded_matches (admin_user_id, source, notice_number, matched_keyword, attachment_file_name, surrounding_text);
+
+    -- 위 버그로 이미 저장된 기존 행 중 일부는 나머지 매칭이 조용히 유실된
+    -- 채로 소규모 단독 매칭처럼 남아있을 수 있다. 이 정리는 데이터 삭제라
+    -- 여기서 자동으로 하지 않는다 — 사용자가 직접 확인 후 정리를 요청하면
+    -- 그때 처리한다(2026-09-19 대화 참고).
+
     -- 요구사항(2026-09-11 사용자 제안: "전일 공사 항목의 첨부파일을 서버에
     -- 저장하고 서버에 저장한 파일을 키워드 검색하면 어떨까"): 공고 상세정보(첨부
     -- 파일 URL, 예산, 업무구분 등)는 공고 등록 후 바뀌지 않는데도, 최근 3일
