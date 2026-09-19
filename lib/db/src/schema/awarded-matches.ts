@@ -70,12 +70,28 @@ export const awardedMatchesTable = pgTable(
     // A notice can legitimately produce more than one row (different
     // attachment / different matched keyword), but the exact same hit should
     // never be inserted twice across scan reruns.
+    //
+    // 요구사항(2026-09-19 사용자 재지적: "검색결과가 1000m2 이하인 것들도
+    // 많던데 내가 1000m2 이하는 검색하지 말라고 했잖아"): 예전에는 이
+    // 인덱스가 (계정, 사이트, 공고, 매칭키워드, 첨부파일명)까지만 걸려서,
+    // 같은 첨부파일 한 개 안에서 "부직포"가 여러 줄(예: 87㎡, 263㎡)에 걸쳐
+    // 여러 번 매칭되면 전부 똑같은 유니크 키를 갖게 됐다 — 그래서 daily-
+    // scan.ts는 메모리상으로는 "이 공고에 매칭이 2건이니 1,000㎡ 이하
+    // 단독매칭 제외 규칙을 적용하지 않는다"고 정확히 판단했는데도, 실제
+    // DB에는 onConflictDoNothing에 의해 그 중 1건(더 작은 수량일 수도 있는
+    // 아무 1건)만 저장되고 나머지는 조용히 사라졌다. 결과적으로 "여러 건 중
+    // 작은 것 하나만 화면에 노출"되는, 사용자가 명시적으로 하지 말라고 한
+    // 상황이 재현됐다. surroundingText(매칭된 줄의 셀/행 위치까지 포함하는
+    // 텍스트, 예: "C29=... E29=87 F29=㎡")를 인덱스에 추가해 같은 파일 안의
+    // 서로 다른 매칭 줄이 서로 다른 유니크 키를 갖게 한다 — 재실행 시 완전히
+    // 동일한 매칭(같은 줄)만 여전히 중복 삽입을 막는다.
     uniqueIndex("awarded_matches_unique_hit").on(
       table.adminUserId,
       table.source,
       table.noticeNumber,
       table.matchedKeyword,
       table.attachmentFileName,
+      table.surroundingText,
     ),
   ],
 );
