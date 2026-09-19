@@ -8,13 +8,14 @@ import {
   open,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import { promisify } from "node:util";
 import { pipeline } from "node:stream/promises";
@@ -536,13 +537,40 @@ export async function lookupGovCorpInfo(
   return null;
 }
 
+// 최적화(2026-09-19): 예전에는 요청마다 new HttpsProxyAgent()를 만들어 매번
+// 프록시와 TLS 연결을 새로 맺었다. 하나의 keep-alive 에이전트를 재사용해
+// 연결 비용과 소켓 수를 줄인다.
+let sharedProxyAgent: HttpsProxyAgent<string> | undefined;
+let sharedProxyUrl: string | undefined;
+function getProxyAgent(): HttpsProxyAgent<string> | undefined {
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy;
+  if (!proxyUrl) return undefined;
+  if (!sharedProxyAgent || sharedProxyUrl !== proxyUrl) {
+    sharedProxyAgent = new HttpsProxyAgent(proxyUrl, { keepAlive: true, maxSockets: 8 });
+    sharedProxyUrl = proxyUrl;
+  }
+  return sharedProxyAgent;
+}
+
+// 최적화(2026-09-19): 재사용된(이미 연결된) 소켓에 lookup/connect 리스너를
+// 요청마다 계속 붙이면 영원히 호출되지 않고 쌓여 MaxListenersExceededWarning
+// (메모리 누수)이 난다. 아직 연결 중인 새 소켓에만 붙인다.
+function trackSocketPhase(socket: import("node:net").Socket, setPhase: (phase: string) => void): void {
+  if (!socket.connecting) {
+    setPhase("response");
+    return;
+  }
+  socket.once("lookup", () => setPhase("connect"));
+  socket.once("connect", () => setPhase("tls"));
+  socket.once("secureConnect", () => setPhase("response"));
+}
+
 export async function requestBuffer(url: string, timeoutMs = 45_000, redirects = 0): Promise<{
   status: number;
   headers: Record<string, string | string[] | undefined>;
   body: Buffer;
 }> {
   assertCircuitAvailable();
-  const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy;
   try {
     const response = await new Promise<{
       status: number;
@@ -550,7 +578,7 @@ export async function requestBuffer(url: string, timeoutMs = 45_000, redirects =
       body: Buffer;
     }>((resolve, reject) => {
       const target = new URL(url);
-      const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+      const agent = getProxyAgent();
       const startedAt = Date.now();
       let phase = "dns";
       let settled = false;
@@ -579,14 +607,8 @@ export async function requestBuffer(url: string, timeoutMs = 45_000, redirects =
         });
       });
       request.on("socket", (socket) => {
-        socket.once("lookup", () => {
-          phase = "connect";
-        });
-        socket.once("connect", () => {
-          phase = "tls";
-        });
-        socket.once("secureConnect", () => {
-          phase = "response";
+        trackSocketPhase(socket, (next) => {
+          phase = next;
         });
       });
       const hardTimeout = setTimeout(() => {
@@ -1519,19 +1541,114 @@ function contentDispositionName(value: string | null): string | null {
   return plain?.[1] ?? null;
 }
 
+// 최적화(2026-09-19): 첨부파일 한 개의 최대 크기. 예전에는 응답 전체를 메모리에
+// 모은 뒤(Buffer.concat) 디스크에 썼기 때문에, 큰 도면 ZIP 하나로 메모리가
+// 수 GB까지 치솟았다(Railway 지표상 최대 4.6GB). 이제 디스크로 바로 흘려
+// 쓰고, 상한을 넘으면 중단한다.
+export const MAX_ATTACHMENT_BYTES = Number(process.env.MAX_ATTACHMENT_MB ?? 500) * 1024 * 1024;
+const DOWNLOAD_TIMEOUT_MS = 180_000;
+
+async function requestToFile(
+  url: string,
+  destination: string,
+  timeoutMs: number,
+  redirects = 0,
+): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; bytes: number }> {
+  assertCircuitAvailable();
+  try {
+    const response = await new Promise<{
+      status: number;
+      headers: Record<string, string | string[] | undefined>;
+      bytes: number;
+      redirectTo?: string;
+    }>((resolve, reject) => {
+      const target = new URL(url);
+      const agent = getProxyAgent();
+      let settled = false;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(hardTimeout);
+        fn();
+      };
+      const request = httpsRequest(target, {
+        method: "GET",
+        agent,
+        ...(agent ? {} : { autoSelectFamily: true, autoSelectFamilyAttemptTimeout: 250 }),
+        headers: { Accept: "*/*", "User-Agent": "Mozilla/5.0 BidAttachmentSearch/1.0" },
+      }, (incoming) => {
+        const status = incoming.statusCode ?? 0;
+        const headers = incoming.headers;
+        if ([301, 302, 303, 307, 308].includes(status) && headers.location) {
+          incoming.resume();
+          const location = Array.isArray(headers.location) ? headers.location[0] : headers.location;
+          finish(() => resolve({ status, headers, bytes: 0, redirectTo: new URL(location, url).toString() }));
+          return;
+        }
+        if (status < 200 || status >= 300) {
+          incoming.resume();
+          finish(() => resolve({ status, headers, bytes: 0 }));
+          return;
+        }
+        const declared = Number(headers["content-length"] ?? 0);
+        if (declared > MAX_ATTACHMENT_BYTES) {
+          incoming.destroy();
+          finish(() => reject(new Error(`첨부파일이 크기 상한(${Math.round(MAX_ATTACHMENT_BYTES / 1048576)}MB)을 넘습니다: ${Math.round(declared / 1048576)}MB`)));
+          return;
+        }
+        let bytes = 0;
+        incoming.on("data", (chunk: Buffer) => {
+          bytes += chunk.length;
+          if (bytes > MAX_ATTACHMENT_BYTES) {
+            incoming.destroy(new Error(`첨부파일이 크기 상한(${Math.round(MAX_ATTACHMENT_BYTES / 1048576)}MB)을 넘어 중단했습니다.`));
+          }
+        });
+        pipeline(incoming, createWriteStream(destination))
+          .then(() => finish(() => resolve({ status, headers, bytes })))
+          .catch((error) => finish(() => reject(error)));
+      });
+      const hardTimeout = setTimeout(() => {
+        const error = Object.assign(new Error(`다운로드 시간 제한 ${timeoutMs}ms 초과`), { code: "ETIMEDOUT", hostname: target.hostname });
+        request.destroy(error);
+        finish(() => reject(error));
+      }, timeoutMs);
+      request.on("error", (error) => finish(() => reject(error)));
+      request.end();
+    });
+    if (response.redirectTo) {
+      if (redirects >= 5) throw new Error("HTTP 리다이렉트가 5회를 초과했습니다.");
+      return requestToFile(response.redirectTo, destination, timeoutMs, redirects + 1);
+    }
+    recordNetworkSuccess();
+    return response;
+  } catch (error) {
+    await rm(destination, { force: true }).catch(() => {});
+    if (error instanceof CircuitOpenError) throw error;
+    // 크기 상한 초과는 네트워크 장애가 아니므로 회로 차단 카운트에 넣지 않는다.
+    if (error instanceof Error && error.message.includes("크기 상한")) throw error;
+    return recordNetworkFailure(error);
+  }
+}
+
 export async function downloadAttachment(
   url: string,
   directory: string,
   suggestedName: string,
 ): Promise<string> {
-  const response = await requestBuffer(url, 90_000);
-  if (response.status < 200 || response.status >= 300) throw new Error(`다운로드 HTTP ${response.status}`);
+  const temporary = path.join(directory, `.download-${randomUUID()}`);
+  const response = await requestToFile(url, temporary, DOWNLOAD_TIMEOUT_MS);
+  if (response.status < 200 || response.status >= 300) {
+    await rm(temporary, { force: true });
+    throw new Error(`다운로드 HTTP ${response.status}`);
+  }
+  if (response.bytes === 0) {
+    await rm(temporary, { force: true });
+    throw new Error("빈 파일이 반환되었습니다.");
+  }
   const contentDisposition = response.headers["content-disposition"];
   const disposition = contentDispositionName(Array.isArray(contentDisposition) ? contentDisposition[0] : contentDisposition ?? null);
   const filePath = await uniquePath(directory, disposition || suggestedName);
-  const bytes = response.body;
-  if (bytes.length === 0) throw new Error("빈 파일이 반환되었습니다.");
-  await writeFile(filePath, bytes);
+  await rename(temporary, filePath);
   return filePath;
 }
 
@@ -2785,4 +2902,40 @@ export async function resolveAttachmentFile(
   const info = await stat(target);
   if (!info.isFile()) throw new Error("파일을 찾을 수 없습니다.");
   return target;
+}
+
+// 최적화(2026-09-19): /search 수동 검색 작업은 첨부파일 원본 + 전체 ZIP 묶음 +
+// 엑셀을 JOB_ROOT(영구 볼륨)에 저장하는데 삭제 로직이 없어 볼륨이 계속
+// 불어났다(일주일 새 약 1GB → 10.5GB). 마지막 갱신 후 JOB_RETENTION_DAYS
+// (기본 14일)가 지난 완료 작업은 디렉터리째 삭제한다. 진행 중인 작업은 건드리지 않는다.
+export const JOB_RETENTION_DAYS = Number(process.env.JOB_RETENTION_DAYS ?? 14);
+
+export async function cleanupOldJobs(): Promise<{ deletedCount: number }> {
+  const cutoff = Date.now() - JOB_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  let deletedCount = 0;
+  let entries;
+  try {
+    entries = await readdir(JOB_ROOT, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { deletedCount };
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const directory = path.join(JOB_ROOT, entry.name);
+    let lastTouched: number;
+    try {
+      const job = JSON.parse(await readFile(jobStatePath(entry.name), "utf8")) as CollectionJob;
+      if (job.status === "queued" || job.status === "running") continue;
+      lastTouched = Date.parse(job.updatedAt ?? job.startedAt ?? "") || (await stat(directory)).mtimeMs;
+    } catch {
+      lastTouched = (await stat(directory).catch(() => null))?.mtimeMs ?? Date.now();
+    }
+    if (lastTouched >= cutoff) continue;
+    await rm(directory, { recursive: true, force: true });
+    jobs.delete(entry.name);
+    deletedCount += 1;
+  }
+  logger.info({ deletedCount, retentionDays: JOB_RETENTION_DAYS }, "수동 검색 작업 보관기간 만료 정리 완료");
+  return { deletedCount };
 }
