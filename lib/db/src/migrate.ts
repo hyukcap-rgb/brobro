@@ -152,12 +152,22 @@ export async function ensureSchema(): Promise<void> {
     -- 요구사항(2026-09-14 사용자 요청: "나라장터를 기본으로, 토지공사나 군대
     -- 입찰싸이트도 선택하면 검색할 수 있도록"): 이 매칭을 어느 사이트(나라장터/LH)
     -- 에서 찾았는지. 기존 배포된 테이블에는 없는 컬럼이라 다른 컬럼들과 같은
-    -- 방식으로 보강한다. source가 다르면 같은 공고번호라도 별개의 리드이므로,
-    -- 유니크 인덱스도 source를 포함하도록 다시 만든다(구 인덱스는 제거).
+    -- 방식으로 보강한다.
+    --
+    -- (2026-09-19: 이 단계에서 하던 "유니크 인덱스를 source 포함 4개 컬럼으로
+    -- 다시 만든다"는 DROP INDEX/CREATE UNIQUE INDEX는 제거했다. ensureSchema()는
+    -- 매 부팅마다 이 스크립트 전체를 다시 실행하므로, 그 DROP+CREATE도 매번
+    -- 재실행되어 최종(아래 admin_user_id + surrounding_text까지 포함하는) 인덱스를
+    -- 매 부팅마다 이 옛날 4개 컬럼짜리 정의로 일시적으로 좁혔다가 다시 넓히고
+    -- 있었다. 이미 admin/msjbro 두 계정이 같은 공고/키워드/첨부파일을 각자
+    -- 찾아내는(따라서 admin_user_id만 다른) 정상적인 상황이 실제로 발생했는데,
+    -- admin_user_id가 빠진 이 4개 컬럼 정의로는 그게 "중복"으로 보여 CREATE
+    -- UNIQUE INDEX가 23505로 실패했고, 그 여파로 이 배치 전체(아래 surrounding_text
+    -- 추가분 포함)가 롤백되어 조용히 무효화됐다. 이 단계는 과거 마이그레이션
+    -- 경로의 중간 단계일 뿐이고 운영 DB는 이미 이 단계를 지나 최신 정의까지
+    -- 가 있으므로, 재실행할 필요가 없고 재실행하면 오히려 위험하다 — 최종
+    -- DROP INDEX/CREATE UNIQUE INDEX(맨 아래)만 남겨둔다.
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '나라장터';
-    DROP INDEX IF EXISTS awarded_matches_unique_hit;
-    CREATE UNIQUE INDEX IF NOT EXISTS awarded_matches_unique_hit
-      ON awarded_matches (source, notice_number, matched_keyword, attachment_file_name);
 
     -- 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
     -- 야. msjbro에는 admin 의 모든 정보를 공유하지않아... 두 아이디로 입력은
@@ -166,13 +176,15 @@ export async function ensureSchema(): Promise<void> {
     -- admin_user_id를 포함시켜, 두 계정이 우연히 같은 키워드로 같은 공고를
     -- 각자 찾아내도 한쪽이 다른 쪽 결과를 가려버리지(onConflictDoNothing으로
     -- 씹히지) 않고 각자의 리드로 독립적으로 남게 한다.
+    -- (2026-09-19: 여기서 하던 "유니크 인덱스를 admin_user_id 포함 5개 컬럼으로
+    -- 다시 만든다"는 DROP INDEX/CREATE UNIQUE INDEX도 같은 이유로 제거했다 —
+    -- 바로 위 4개 컬럼 단계와 마찬가지로 매 부팅마다 재실행되는 중간 단계일
+    -- 뿐이며, 운영 DB는 이미 이 단계를 지나 있다. 최종 정의(맨 아래, 6개
+    -- 컬럼)로 한 번에 가도록 남겨둔다.
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS admin_user_id INTEGER REFERENCES admin_users(id);
     UPDATE awarded_matches SET admin_user_id = (SELECT id FROM admin_users WHERE username = 'admin' LIMIT 1)
       WHERE admin_user_id IS NULL;
     ALTER TABLE awarded_matches ALTER COLUMN admin_user_id SET NOT NULL;
-    DROP INDEX IF EXISTS awarded_matches_unique_hit;
-    CREATE UNIQUE INDEX IF NOT EXISTS awarded_matches_unique_hit
-      ON awarded_matches (admin_user_id, source, notice_number, matched_keyword, attachment_file_name);
 
     -- 첨부파일 5개월 보관/자동삭제(attachment-cleanup.ts). 채워지면 디스크 파일은
     -- 이미 삭제된 상태이고 리드 레코드 자체는 남아있음을 뜻한다.
