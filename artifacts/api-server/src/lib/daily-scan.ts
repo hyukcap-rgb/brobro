@@ -936,9 +936,37 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               // 키워드가 매칭된 행이 아니라 전혀 다른 행/첨부파일(시방서·현장설명서 등)에
               // 있는 경우가 많아서다. ATTACHMENT_TEXT_CAP을 넘으면 더 이상 추가하지
               // 않는다(대용량 첨부파일이 여러 개라도 메모리를 무한정 쓰지 않도록).
+              // 장애 대응(2026-09-23 사고: 관리자 계정 일별 스캔이 공고
+              // R26BK01720667-000 처리 직후 "RangeError: Invalid string length"로
+              // 전체 중단됨 — 첨부파일 배포 직후 첫 스캔에서 처음 발생). 원인: 특정
+              // 손상/비정상 첨부파일에서 extractSegments가 비정상적으로 많은(또는
+              // 개별적으로 매우 긴) 세그먼트를 반환하면, 아래 join이 최종적으로
+              // ATTACHMENT_TEXT_CAP으로 잘리기도 전에 문자열 최대 길이를 넘겨
+              // 스캔 실행 전체가 죽었다(이후 공고는 하나도 처리되지 못함). 이제는
+              // 세그먼트를 누적하면서 매 조각을 개별적으로도 캡을 넘지 않게 자르고
+              // 캡에 도달하면 즉시 멈춰, 거대한 중간 문자열을 절대 만들지 않는다.
+              // 정상 범위 첨부파일에서는 최종 결과(allAttachmentText, 캡까지 잘림)가
+              // 이전과 동일하다. try/catch는 그래도 예상 못한 실패가 있으면 이
+              // 첨부파일만 건너뛰고 나머지 공고 처리는 계속되도록 하는 안전망이다.
               if (allAttachmentText.length < ATTACHMENT_TEXT_CAP) {
-                const segmentText = segments.map((s) => s.itemContext ?? s.text).join("\n");
-                allAttachmentText = `${allAttachmentText}\n${segmentText}`.slice(0, ATTACHMENT_TEXT_CAP);
+                try {
+                  // "\n"으로 join한 것과 동일한 모양(구분자가 조각 "사이"에만 들어가고
+                  // 끝에는 안 붙음)을 유지하기 위해 첫 조각 여부를 따로 추적한다.
+                  let segmentText = "";
+                  let isFirstChunk = true;
+                  for (const segment of segments) {
+                    const chunk = (segment.itemContext ?? segment.text ?? "").slice(0, ATTACHMENT_TEXT_CAP);
+                    segmentText += (isFirstChunk ? "" : "\n") + chunk;
+                    isFirstChunk = false;
+                    if (segmentText.length >= ATTACHMENT_TEXT_CAP) break;
+                  }
+                  allAttachmentText = `${allAttachmentText}\n${segmentText}`.slice(0, ATTACHMENT_TEXT_CAP);
+                } catch (error) {
+                  logger.warn(
+                    { err: error, noticeNumber, fileName: path.basename(searchablePath) },
+                    "일별 스캔[진단]: 첨부파일 텍스트 누적 실패 (이 첨부파일만 건너뜀)",
+                  );
+                }
               }
 
               // 요구사항 4: 설정된 키워드(=선택한 품목, 기본 "부직포")가 있는 공고만.
