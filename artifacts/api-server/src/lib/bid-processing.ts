@@ -999,6 +999,20 @@ async function fetchAwards(targets: Set<string>): Promise<Map<string, Record<str
   return found;
 }
 
+// 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): extractItemFields는
+// 매칭된 결과마다 반복 호출되는 핫패스인데, 이 정규식들은 전부 고정 상수라
+// 호출마다 새로 만들 필요가 없다. 특히 UNIT_ALTERNATION 기반 정규식은
+// new RegExp(문자열)로 매번 패턴을 다시 파싱했었는데, 모듈 스코프로 끌어올려
+// 한 번만 컴파일하도록 바꿨다(matchAll은 내부적으로 정규식을 복제해 쓰므로
+// 전역(g) 플래그를 공유해도 안전함).
+const ITEM_UNIT_ALTERNATION = "㎡|m²|m2|M2|m|kg|ton|톤|매|개|식";
+const ITEM_UNIT_PATTERN = /^(?:㎡|m²|m2|M2|m|kg|ton|톤|매|개|식)$/i;
+const ITEM_NUMERIC_PATTERN = /^[0-9][0-9,]*(?:\.[0-9]+)?$/;
+const ITEM_QUANTITY_UNIT_PATTERN = new RegExp(
+  `([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*(${ITEM_UNIT_ALTERNATION})(?!\\s*/)(?![0-9A-Za-z가-힣])`,
+  "gi",
+);
+
 export function extractItemFields(text: string, keywords: readonly string[] = DEFAULT_KEYWORDS): Pick<SearchResult, "itemName" | "itemSpecification" | "itemQuantity" | "itemUnit" | "itemAmount"> {
   // xlsx cells arrive already joined as "A1=텍스트 | B1=텍스트" (see extractXlsx's
   // itemContext), but text pulled from a PDF/HWP/DOCX table row has no "|" —
@@ -1011,20 +1025,18 @@ export function extractItemFields(text: string, keywords: readonly string[] = DE
     .map((part) => part.trim().replace(/^[A-Z]+\d+=/, "").trim())
     .filter(Boolean);
   const keywordIndex = cellValues.findIndex((value) => keywords.some((keyword) => value.includes(keyword)));
-  const unitPattern = /^(?:㎡|m²|m2|M2|m|kg|ton|톤|매|개|식)$/i;
-  const numericPattern = /^[0-9][0-9,]*(?:\.[0-9]+)?$/;
-  const unitIndex = cellValues.findIndex((value) => unitPattern.test(value));
+  const unitIndex = cellValues.findIndex((value) => ITEM_UNIT_PATTERN.test(value));
   const adjacentQuantity =
-    unitIndex > 0 && numericPattern.test(cellValues[unitIndex - 1])
+    unitIndex > 0 && ITEM_NUMERIC_PATTERN.test(cellValues[unitIndex - 1])
       ? cellValues[unitIndex - 1]
-      : unitIndex >= 0 && numericPattern.test(cellValues[unitIndex + 1] ?? "")
+      : unitIndex >= 0 && ITEM_NUMERIC_PATTERN.test(cellValues[unitIndex + 1] ?? "")
         ? cellValues[unitIndex + 1]
         : undefined;
   const adjacentSpecification =
     keywordIndex >= 0 &&
     cellValues[keywordIndex + 1] &&
-    !unitPattern.test(cellValues[keywordIndex + 1]) &&
-    !numericPattern.test(cellValues[keywordIndex + 1])
+    !ITEM_UNIT_PATTERN.test(cellValues[keywordIndex + 1]) &&
+    !ITEM_NUMERIC_PATTERN.test(cellValues[keywordIndex + 1])
       ? cellValues[keywordIndex + 1]
       : undefined;
   const specification =
@@ -1040,15 +1052,7 @@ export function extractItemFields(text: string, keywords: readonly string[] = DE
   // 같은 기호 문자를 단어문자로 취급하지 않아 뒤에 아무것도 없어도 항상
   // 매칭에 실패했으므로(예: "500 ㎡" 전체가 무시됨), 숫자/영문/한글이 바로
   // 뒤따르지 않는지를 직접 확인하는 방식으로 대체한다.
-  const UNIT_ALTERNATION = "㎡|m²|m2|M2|m|kg|ton|톤|매|개|식";
-  const quantityMatch = [
-    ...text.matchAll(
-      new RegExp(
-        `([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*(${UNIT_ALTERNATION})(?!\\s*/)(?![0-9A-Za-z가-힣])`,
-        "gi",
-      ),
-    ),
-  ][0];
+  const quantityMatch = [...text.matchAll(ITEM_QUANTITY_UNIT_PATTERN)][0];
   const amount = text.match(/(?:금액|합계)\s*[:：]?\s*([0-9][0-9,]*)\s*원?/i)?.[1];
   // 요구사항(2026-09-11 사용자 요청: "일일 검색결과에서 수량에 소숫점 이하가
   // 무한대일때 무한대로 나오네. 소수점 이하는 절삭해서 보여줘"): 원문 첨부파일
@@ -1392,6 +1396,19 @@ export async function searchBusinessContactOnWeb(
   return foundPhone ? { phone: foundPhone } : null;
 }
 
+// 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): fillMissingBusinessContact
+// 안에서 "주소/전화번호가 아직 비어있는지" 판정식이 단계마다(첨부파일 조회
+// 전/후, 조달청 등록정보 조회 전/후, 포털 조회 후) 총 4번씩 동일하게 반복
+// 됐다. 매번 result의 현재 값을 다시 읽어야 하므로(단계마다 값이 채워질 수
+// 있음) 캐싱이 아니라 헬퍼 함수로만 추출한다 — 호출 시점의 result 상태를
+// 그대로 평가하므로 판정 결과는 이전과 동일하다.
+function needsBusinessAddress(result: SearchResult): boolean {
+  return !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
+}
+function needsBusinessPhone(result: SearchResult): boolean {
+  return !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
+}
+
 // Fills in bidderAddress/bidderPhone when the government award record left
 // them blank: the notice's own attachments are tried first (free), then the
 // portal search (rate-limited, needs credentials).
@@ -1401,9 +1418,8 @@ async function fillMissingBusinessContact(
   bizno?: string | null,
 ): Promise<void> {
   if (!result.bidderName || result.bidderName === "미공개/확인불가") return;
-  const needsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
-  const needsPhone =
-    !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
+  const needsAddress = needsBusinessAddress(result);
+  const needsPhone = needsBusinessPhone(result);
   if (!needsAddress && !needsPhone) return;
 
   const fromAttachment = await findBusinessContactInAttachments(job, result.noticeNumber, result.bidderName);
@@ -1416,9 +1432,8 @@ async function fillMissingBusinessContact(
     result.contactSource ??= "attachment";
   }
 
-  let stillNeedsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
-  let stillNeedsPhone =
-    !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
+  let stillNeedsAddress = needsBusinessAddress(result);
+  let stillNeedsPhone = needsBusinessPhone(result);
   if (!stillNeedsAddress && !stillNeedsPhone) return;
 
   // 요구사항(2026-09-11 사용자 요청): 정부 낙찰기록/첨부파일에도 없으면,
@@ -1436,14 +1451,12 @@ async function fillMissingBusinessContact(
         result.contactSource ??= "registry";
       }
     }
-    stillNeedsAddress = !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
-    stillNeedsPhone =
-      !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
+    stillNeedsAddress = needsBusinessAddress(result);
+    stillNeedsPhone = needsBusinessPhone(result);
     if (!stillNeedsAddress && !stillNeedsPhone) return;
   }
 
-  const knownAddress =
-    result.bidderAddress && result.bidderAddress !== "미공개/확인불가" ? result.bidderAddress : null;
+  const knownAddress = needsBusinessAddress(result) ? null : result.bidderAddress;
 
   const fromPortal = await searchBusinessContactOnPortal(result.bidderName, knownAddress);
   if (fromPortal) {
@@ -1457,8 +1470,7 @@ async function fillMissingBusinessContact(
     }
   }
 
-  const stillNeedsPhoneAfterPortal =
-    !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
+  const stillNeedsPhoneAfterPortal = needsBusinessPhone(result);
   if (stillNeedsPhoneAfterPortal) {
     const fromWeb = await searchBusinessContactOnWeb(result.bidderName, knownAddress);
     if (fromWeb?.phone) {
@@ -1721,12 +1733,19 @@ async function walk(directory: string): Promise<string[]> {
   return output;
 }
 
+// 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): decodeText는 첨부파일
+// 텍스트를 읽을 때마다 호출되는데, 매번 TextDecoder를 새로 만들 필요가 없다.
+// 여기서는 { stream: true } 없이 매 호출을 완결된 단일 decode()로 쓰므로
+// 인스턴스에 스트리밍 상태가 남지 않아 재사용해도 결과는 이전과 동일하다.
+const UTF8_TEXT_DECODER = new TextDecoder("utf-8", { fatal: false });
+const EUCKR_TEXT_DECODER = new TextDecoder("euc-kr", { fatal: false });
+
 function decodeText(bytes: Buffer): string {
-  const utf8 = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const utf8 = UTF8_TEXT_DECODER.decode(bytes);
   const replacementRatio = (utf8.match(/\uFFFD/g)?.length ?? 0) / Math.max(utf8.length, 1);
   if (replacementRatio < 0.01) return utf8;
   try {
-    return new TextDecoder("euc-kr", { fatal: false }).decode(bytes);
+    return EUCKR_TEXT_DECODER.decode(bytes);
   } catch {
     return utf8;
   }
@@ -1837,8 +1856,16 @@ async function extractPdf(filePath: string): Promise<ExtractedSegment[]> {
   }
   const target = `${filePath}.txt`;
   await command("pdftotext", ["-layout", filePath, target]);
-  const text = decodeText(await readFile(target));
-  await rm(target, { force: true });
+  // 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): readFile이 실패하면
+  // 아래 rm이 실행되지 않아 임시 .txt 파일이 남는 누수가 있었다. try/finally로
+  // 감싸 성공/실패 어느 경우에도 항상 정리되게 했다 — 성공 경로의 반환값은
+  // 이전과 동일하다.
+  let text: string;
+  try {
+    text = decodeText(await readFile(target));
+  } finally {
+    await rm(target, { force: true });
+  }
   return text.split("\f").flatMap((pageText, pageIndex) =>
     pageText
       .split(/\r?\n/)
@@ -2020,8 +2047,17 @@ export function searchSegments(segments: ExtractedSegment[], keywords: readonly 
   section: "관급자재" | "사급자재" | null;
 }[] {
   const matches: ReturnType<typeof searchSegments> = [];
+  // 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): 이전에는 세그먼트 ×
+  // 키워드 조합마다 toLocaleLowerCase를 매번 새로 계산했다. 키워드 목록은
+  // 세그먼트 루프 내내 동일하므로 미리 한 번만 소문자로 바꿔두고, 세그먼트
+  // 텍스트도 세그먼트당 1회만 소문자로 바꿔 재사용한다. 포함 여부 판정(includes)
+  // 결과와 foundKeywords에 담기는 값(원래 대소문자의 keyword)은 이전과 동일하다.
+  const lowerKeywords = keywords.map((keyword) => ({ keyword, lower: keyword.toLocaleLowerCase("ko-KR") }));
   for (const segment of segments) {
-    const foundKeywords = keywords.filter((keyword) => segment.text.toLocaleLowerCase("ko-KR").includes(keyword.toLocaleLowerCase("ko-KR")));
+    const lowerSegmentText = segment.text.toLocaleLowerCase("ko-KR");
+    const foundKeywords = lowerKeywords
+      .filter(({ lower }) => lowerSegmentText.includes(lower))
+      .map(({ keyword }) => keyword);
     if (!foundKeywords.length) continue;
     const firstIndex = Math.min(
       ...foundKeywords.map((keyword) => segment.text.indexOf(keyword)).filter((index) => index >= 0),
@@ -2687,8 +2723,13 @@ const RESULT_HEADERS = [
 ] as const;
 
 function resultRows(job: CollectionJob): unknown[][] {
+  // 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): job.notices는
+  // noticeNumber 기준으로 이미 유니크하다(uniqueNotices에서 생성됨). 이전에는
+  // searchResults 각 행마다 job.notices를 선형 탐색(O(n))했는데, Map으로 한 번만
+  // 인덱싱해 O(1) 조회로 바꿨다 — 찾는 값과 순서는 이전과 동일하다.
+  const noticesByNumber = new Map(job.notices.map((notice) => [notice.noticeNumber, notice]));
   return job.searchResults.map((item) => {
-    const notice = job.notices.find((candidate) => candidate.noticeNumber === item.noticeNumber);
+    const notice = noticesByNumber.get(item.noticeNumber);
     const attachment = notice?.attachments.find(
       (candidate) => candidate.fileName === item.attachmentFileName,
     );
@@ -2862,24 +2903,31 @@ export interface JobHistoryEntry {
 // available from any browser/device, not just the one that started the job.
 export async function listRecentJobs(limit = 30): Promise<JobHistoryEntry[]> {
   await mkdir(JOB_ROOT, { recursive: true });
-  const entries: JobHistoryEntry[] = [];
-  for (const dirEntry of await readdir(JOB_ROOT, { withFileTypes: true })) {
-    if (!dirEntry.isDirectory()) continue;
-    try {
-      const job = JSON.parse(await readFile(jobStatePath(dirEntry.name), "utf8")) as CollectionJob;
-      entries.push({
-        jobId: job.jobId,
-        status: job.status,
-        keywords: job.keywords?.length ? job.keywords : [...DEFAULT_KEYWORDS],
-        noticeCount: job.notices?.length ?? 0,
-        startedAt: job.startedAt,
-        updatedAt: job.updatedAt,
-        summary: job.summary,
-      });
-    } catch {
-      // Skip unreadable/partial job directories (e.g. still being written).
-    }
-  }
+  const dirEntries = (await readdir(JOB_ROOT, { withFileTypes: true })).filter((entry) => entry.isDirectory());
+  // 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): job 디렉터리별 job.json을
+  // 순차로 읽던 것을 병렬로 읽도록 바꿨다. 결과는 바로 아래에서 updatedAt
+  // 기준으로 다시 정렬하므로 읽는 순서는 최종 출력과 무관하고, 개별 항목 읽기
+  // 실패 시 그 항목만 건너뛰는(전체를 실패시키지 않는) 동작도 그대로 유지된다.
+  const entryResults = await Promise.all(
+    dirEntries.map(async (dirEntry): Promise<JobHistoryEntry | null> => {
+      try {
+        const job = JSON.parse(await readFile(jobStatePath(dirEntry.name), "utf8")) as CollectionJob;
+        return {
+          jobId: job.jobId,
+          status: job.status,
+          keywords: job.keywords?.length ? job.keywords : [...DEFAULT_KEYWORDS],
+          noticeCount: job.notices?.length ?? 0,
+          startedAt: job.startedAt,
+          updatedAt: job.updatedAt,
+          summary: job.summary,
+        };
+      } catch {
+        // Skip unreadable/partial job directories (e.g. still being written).
+        return null;
+      }
+    }),
+  );
+  const entries = entryResults.filter((entry): entry is JobHistoryEntry => entry !== null);
   entries.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
   return entries.slice(0, Math.max(1, Math.min(100, limit)));
 }

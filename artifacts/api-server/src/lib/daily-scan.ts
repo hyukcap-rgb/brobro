@@ -33,6 +33,32 @@ import { listAwardedMatchesForRun } from "./matches-store";
 import { sendScanResultEmail, type ScanResultEmailAttachment } from "./mailer";
 import { logger } from "./logger";
 
+// 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): "우선순위 첨부파일을
+// 앞으로 정렬"하는 동일한 비교 함수가 1차 키워드 파이프라인과 "사용자지정"
+// (2차 키워드) 파이프라인 두 곳에 똑같이 복사돼 있었다. 정렬 기준(내림차순,
+// 우선순위 첨부파일 먼저)은 동일하므로 공용 함수로 추출한다.
+function collectAttachmentsByPriority(detail: Parameters<typeof collectAttachments>[0]): ReturnType<typeof collectAttachments> {
+  return collectAttachments(detail).sort(
+    (a, b) => Number(isPriorityAttachment(b.name)) - Number(isPriorityAttachment(a.name)),
+  );
+}
+
+// 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): "사용자지정"(2차 키워드)
+// 금액 범위 판정도 나라장터/LH 두 파이프라인에 동일한 조건식으로 복사돼
+// 있었다(금액을 구하는 방법만 다름 — 나라장터는 낙찰금액, LH는 기초금액을
+// 대리값으로 씀. 이 차이는 호출부에서 그대로 유지하고, 범위 비교 로직만
+// 공용화한다).
+function isWithinSecondaryAwardRange(
+  amount: number | null | undefined,
+  settings: Awaited<ReturnType<typeof getAppSettings>>,
+): boolean {
+  return (
+    amount != null &&
+    (settings.secondaryMinAwardAmount == null || amount >= settings.secondaryMinAwardAmount) &&
+    (settings.secondaryMaxAwardAmount == null || amount <= settings.secondaryMaxAwardAmount)
+  );
+}
+
 // 하루 API 장애 등으로 여러 날이 한꺼번에 누락된 경우, 한 번의 실행에서 최대
 // 이만큼만 소급 채운다(끝없이 과거로 폭주하는 것을 막는 안전장치). 이보다 긴
 // 공백은 매일 조금씩 나눠서 채워지고, 로그에 경고를 남긴다.
@@ -821,9 +847,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         }
 
         // 요구사항 4, 5: 공사 내역/요청서 첨부파일에서 키워드(=우리가 설정한 품목) 검색.
-        const attachments = collectAttachments(detail).sort(
-          (a, b) => Number(isPriorityAttachment(b.name)) - Number(isPriorityAttachment(a.name)),
-        );
+        const attachments = collectAttachmentsByPriority(detail);
         if (attachments.length === 0) {
           // 원인 진단용 임시 로그: 매칭이 0건인 이유가 "첨부파일 자체가 없어서"인지
           // 아니면 다른 단계(다운로드/텍스트 추출)에서 실패하는지 구분하기 위함.
@@ -1131,10 +1155,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         // 2026-09-18 사용자 재지적 참고).
         if (!primaryMatchedAny && settings.secondaryKeywords.length > 0) {
           const secondaryAwardAmount = Number(award.sucsfbidAmt ?? 0) || null;
-          const inSecondaryRange =
-            secondaryAwardAmount != null &&
-            (settings.secondaryMinAwardAmount == null || secondaryAwardAmount >= settings.secondaryMinAwardAmount) &&
-            (settings.secondaryMaxAwardAmount == null || secondaryAwardAmount <= settings.secondaryMaxAwardAmount);
+          const inSecondaryRange = isWithinSecondaryAwardRange(secondaryAwardAmount, settings);
           if (inSecondaryRange) {
             const secondaryTitleSegments: ExtractedSegment[] = [
               { text: String(detail.bidNtceNm ?? ""), sheet: null, page: null, location: "공고명" },
@@ -1169,9 +1190,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               // 전부 내려받아 보관은 하되(요구사항: 열람/메일 첨부용), 목록에는 공고당
               // 한 행만 남긴다 — 우선순위 첨부파일(isPriorityAttachment, 1차 매칭과
               // 동일 기준)을 대표로 삼는다.
-              const secondaryAttachments = collectAttachments(detail).sort(
-                (a, b) => Number(isPriorityAttachment(b.name)) - Number(isPriorityAttachment(a.name)),
-              );
+              const secondaryAttachments = collectAttachmentsByPriority(detail);
               let primaryAttachment: { matchedFileName: string; storedRelPath: string } | null = null;
               if (secondaryAttachments.length > 0) {
                 const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-secondary-"));
@@ -1341,10 +1360,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           // 2026-09-18 사용자 재지적 참고).
           if (!primaryMatchedAny && settings.secondaryKeywords.length > 0) {
             const secondaryProxyAmount = award.fdmtlAmt;
-            const inSecondaryRange =
-              secondaryProxyAmount != null &&
-              (settings.secondaryMinAwardAmount == null || secondaryProxyAmount >= settings.secondaryMinAwardAmount) &&
-              (settings.secondaryMaxAwardAmount == null || secondaryProxyAmount <= settings.secondaryMaxAwardAmount);
+            const inSecondaryRange = isWithinSecondaryAwardRange(secondaryProxyAmount, settings);
             if (inSecondaryRange) {
               const secondaryTitleSegments: ExtractedSegment[] = [
                 { text: award.noticeName, sheet: null, page: null, location: "공고명" },
