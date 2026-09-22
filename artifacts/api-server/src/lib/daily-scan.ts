@@ -941,6 +941,14 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               for (const match of matches) {
                 const matchedKeyword = match.foundKeywords[0] ?? settings.matchKeywords[0] ?? "";
                 const itemFields = extractItemFields(match.originalText, settings.matchKeywords);
+                const quantityValue =
+                  itemFields.itemQuantity && itemFields.itemQuantity !== "미공개/확인불가"
+                    ? Number(itemFields.itemQuantity.replace(/,/g, ""))
+                    : null;
+                const unit =
+                  itemFields.itemUnit && itemFields.itemUnit !== "미공개/확인불가"
+                    ? itemFields.itemUnit
+                    : null;
                 const quantityText =
                   [itemFields.itemQuantity, itemFields.itemUnit]
                     .filter((value) => value && value !== "미공개/확인불가")
@@ -949,7 +957,20 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                 // 마 ... 검색 결과에 키워드/수량을 꼭 함께 넣어줘"): 문서에 키워드
                 // 단어 자체는 있어도 수량을 특정할 수 없으면 실제 발주 물량을 알 수
                 // 없는 단순 언급일 가능성이 커서 영업 리드로 만들지 않는다.
-                if (!quantityText) continue;
+                //
+                // 요구사항(2026-09-22 사용자 재지적: brog2b.com 실제 결과 화면에서
+                // "부직포 · M2"처럼 숫자 없이 단위만 붙거나, "부직포 · 0 m²"처럼
+                // 수량이 0으로 기재된 행이 같은 공고에서 여러 건 노출되는 문제 발견
+                // — 예: "2026년 긴급누수복구공사 연간단가계약(북구3권역)2차" 공고
+                // 하나가 전부 "부직포 · 0 m²"인 행 24건으로 목록을 채움): 단위 셀만
+                // 단독으로 매칭되면 itemQuantity가 비어도(itemUnit만 있어도) 위
+                // quantityText는 "M2"처럼 채워져 truthy가 되고, 마찬가지로
+                // itemQuantity가 문자 그대로 "0"이면 quantityText가 "0 ㎡"로 채워져
+                // 역시 truthy가 되어 둘 다 위 필터를 통과해 버렸다. 실제 발주 수량이
+                // 없거나(단위만 있음) 0으로 기재된 경우는 "수량 미상"과 실질적으로
+                // 같은 상황(발주 물량을 알 수 없음)이므로 원래 취지대로 함께
+                // 제외한다.
+                if (!quantityText || quantityValue == null || quantityValue <= 0) continue;
                 // 요구사항(2026-09-18 사용자 요청: "관급자제 에 키워드가 있는경우
                 // 검색하지 않아도 됨. 키워드가 관급자제 아래 검색하려는 키워드가
                 // 있는경우 삭제 해줘.이건 우리가 영업을 하지 못해"): 관급자재는
@@ -1016,14 +1037,8 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                     attachmentFileName: matchedFileName,
                     attachmentStoredPath: path.relative(SCAN_ROOT, storedPath),
                   },
-                  quantityValue:
-                    itemFields.itemQuantity && itemFields.itemQuantity !== "미공개/확인불가"
-                      ? Number(itemFields.itemQuantity.replace(/,/g, ""))
-                      : null,
-                  unit:
-                    itemFields.itemUnit && itemFields.itemUnit !== "미공개/확인불가"
-                      ? itemFields.itemUnit
-                      : null,
+                  quantityValue,
+                  unit,
                 });
               }
             }
