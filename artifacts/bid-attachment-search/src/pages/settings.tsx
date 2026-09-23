@@ -13,8 +13,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AlertCircle, CheckCircle2, ListFilter, Loader2, Plus, X } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Filter,
+  ListFilter,
+  Loader2,
+  Mail,
+  Plus,
+  Save,
+  Sparkles,
+  Globe,
+  X,
+} from "lucide-react";
 
 function TagEditor({
   label,
@@ -440,103 +453,69 @@ export default function Settings() {
           <CardTitle>자동 검색 설정</CardTitle>
           <CardDescription>
             매일 오전 7시(KST) 자동 검색에 사용되는 조건입니다. 저장하면 다음 실행부터 바로 적용됩니다.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-2 mb-3">
+            <Globe className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">검색 대상 사이트</span>
+          </div>
+          <SiteSourcePicker values={enabledSources} onChange={setEnabledSources} />
+        </CardContent>
+      </Card>
+
+      {/* 개선(2026-09-23 UI 정리 요청: "설정화면이 너무 복잡하게 되어있네.
+      보기쉽고 알기쉽게 ui를 정리하자"): 예전에는 모든 필드가 카드 하나에 순서
+      없이 쭉 나열돼 있었다. 실제 동작 순서(업무구분 → 추정가격/공사규모 →
+      키워드)에 맞춰 "1차 조건" 카드로 묶어 흐름을 보이게 했다 — 필드·검증·
+      저장 로직은 전혀 바뀌지 않았다. */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Filter className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-base">1차 조건 (첨부파일 내용 검색)</CardTitle>
+          </div>
+          <CardDescription>
             아래 조건(업무구분 → 추정가격/공사규모)으로 전일 낙찰 공고를 1차로 찾은 뒤, 그 공고의 품목 중
             "검색 키워드"와 일치하는 것이 있으면 영업 리드로 등록합니다.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <SiteSourcePicker values={enabledSources} onChange={setEnabledSources} />
-
           <WorkCategoryPicker values={workCategories} onChange={setWorkCategories} />
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="minEstimatedPrice">추정가격 최소 (원)</Label>
-              <Input
-                id="minEstimatedPrice"
-                type="number"
-                min={0}
-                placeholder="제한 없음"
-                value={minEstimatedPrice}
-                onChange={(event) => setMinEstimatedPrice(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="maxEstimatedPrice">추정가격 최대 (원)</Label>
-              <Input
-                id="maxEstimatedPrice"
-                type="number"
-                min={0}
-                placeholder="제한 없음"
-                value={maxEstimatedPrice}
-                onChange={(event) => setMaxEstimatedPrice(event.target.value)}
-              />
-            </div>
-          </div>
-          <p className="text-xs text-muted-foreground -mt-4">
-            비워두면 추정가격으로는 거르지 않습니다. 추정가격이 공개되지 않은 공고는 아래 "최소 공사 규모"
-            기준으로만 판단합니다.
-          </p>
+          <Separator />
 
-          <TagEditor
-            label="검색 키워드 (= 키워드1, 찾을 품목, 첨부파일 내용)"
-            description="1차로 찾은 공고의 첨부파일(내역서/시방서 등)에서 이 키워드(품목)가 발견되면 리드로 등록합니다. 기본값: 부직포"
-            values={matchKeywords}
-            onChange={setMatchKeywords}
-            required
-            emptyHint="최소 1개 이상 입력해야 합니다. 비워두면 저장할 수 없습니다 (비워도 '전체 허용'이 아니라 아무 공고도 매칭되지 않기 때문입니다)."
-          />
-          <div className="space-y-4 rounded-lg border p-4">
-            <TagEditor
-              label='사용자지정 키워드 (= 키워드2, 선택 — 공고 제목 + 낙찰금액만으로 매칭)'
-              description={
-                '위 "검색 키워드"(= 키워드1, 첨부파일 내용 검색)가 이 공고에서 매칭되지 않았을 때만 적용되는 별도 ' +
-                '조건입니다. 여기 등록한 키워드 중 하나라도(OR) 공고 제목에 있고, 아래 "낙찰금액" 범위 안이면(업무구분/' +
-                '추정가격/최소 공사 규모와 상관없이) "사용자지정"으로 리드 등록합니다. 키워드1이 이미 매칭된 공고는 ' +
-                '(키워드1 리드로 이미 목록에 뜨므로) 이 조건으로 중복 등록되지 않습니다. 결과 목록·메일에는 실제 매칭된 ' +
-                '키워드 대신 "사용자지정"으로 표시되고, 해당 공고의 첨부파일은 (내용 검색 없이) 전부 내려받아 함께 ' +
-                "첨부합니다. 비워두면 이 조건은 사용하지 않습니다. 권장: 낙찰금액 최소를 1,000,000,000(10억)으로 설정."
-              }
-              values={secondaryKeywords}
-              onChange={setSecondaryKeywords}
-              emptyHint="비어 있으면 사용자지정 조건을 사용하지 않습니다."
-            />
+          <div className="space-y-2">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="secondaryMinAwardAmount">낙찰금액 최소 (원)</Label>
+                <Label htmlFor="minEstimatedPrice">추정가격 최소 (원)</Label>
                 <Input
-                  id="secondaryMinAwardAmount"
-                  type="number"
-                  min={0}
-                  placeholder="제한 없음 (권장: 1000000000 = 10억)"
-                  value={secondaryMinAwardAmount}
-                  onChange={(event) => setSecondaryMinAwardAmount(event.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="secondaryMaxAwardAmount">낙찰금액 최대 (원)</Label>
-                <Input
-                  id="secondaryMaxAwardAmount"
+                  id="minEstimatedPrice"
                   type="number"
                   min={0}
                   placeholder="제한 없음"
-                  value={secondaryMaxAwardAmount}
-                  onChange={(event) => setSecondaryMaxAwardAmount(event.target.value)}
+                  value={minEstimatedPrice}
+                  onChange={(event) => setMinEstimatedPrice(event.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="maxEstimatedPrice">추정가격 최대 (원)</Label>
+                <Input
+                  id="maxEstimatedPrice"
+                  type="number"
+                  min={0}
+                  placeholder="제한 없음"
+                  value={maxEstimatedPrice}
+                  onChange={(event) => setMaxEstimatedPrice(event.target.value)}
                 />
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              LH는 실제 낙찰금액을 제공하지 않아, LH 공고에는 이 범위를 기초금액(예산)과 비교합니다. LH는 첨부파일
-              다운로드 링크를 제공하지 않아 제목 매칭만으로 리드를 남기고 첨부파일은 붙지 않습니다.
+              비워두면 추정가격으로는 거르지 않습니다. 추정가격이 공개되지 않은 공고는 아래 "최소 공사 규모"
+              기준으로만 판단합니다.
             </p>
           </div>
 
-          <TagEditor
-            label="업무구분(공종) 키워드 — 공사에만 적용"
-            description="공사 공고의 공종이 이 키워드 중 하나를 포함해야 검색 대상이 됩니다. 비워두면 모든 공종을 검색합니다. (물품/용역 공고에는 적용되지 않습니다)"
-            values={workTypeKeywords}
-            onChange={setWorkTypeKeywords}
-          />
           <div className="space-y-2">
             <Label htmlFor="minBudget">최소 공사 규모 (원)</Label>
             <p className="text-xs text-muted-foreground">
@@ -553,8 +532,94 @@ export default function Settings() {
             />
           </div>
 
-          <EmailListEditor values={notificationEmails} onChange={setNotificationEmails} />
+          <Separator />
 
+          <TagEditor
+            label="검색 키워드 (= 키워드1, 찾을 품목, 첨부파일 내용)"
+            description="1차로 찾은 공고의 첨부파일(내역서/시방서 등)에서 이 키워드(품목)가 발견되면 리드로 등록합니다. 기본값: 부직포"
+            values={matchKeywords}
+            onChange={setMatchKeywords}
+            required
+            emptyHint="최소 1개 이상 입력해야 합니다. 비워두면 저장할 수 없습니다 (비워도 '전체 허용'이 아니라 아무 공고도 매칭되지 않기 때문입니다)."
+          />
+
+          <TagEditor
+            label="업무구분(공종) 키워드 — 공사에만 적용"
+            description="공사 공고의 공종이 이 키워드 중 하나를 포함해야 검색 대상이 됩니다. 비워두면 모든 공종을 검색합니다. (물품/용역 공고에는 적용되지 않습니다)"
+            values={workTypeKeywords}
+            onChange={setWorkTypeKeywords}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-base">2차 조건 — 사용자지정 키워드 (선택)</CardTitle>
+          </div>
+          <CardDescription>
+            위 "검색 키워드"(= 키워드1, 첨부파일 내용 검색)가 이 공고에서 매칭되지 않았을 때만 적용되는 별도
+            조건입니다. 여기 등록한 키워드 중 하나라도(OR) 공고 제목에 있고, 아래 "낙찰금액" 범위 안이면(업무구분/
+            추정가격/최소 공사 규모와 상관없이) "사용자지정"으로 리드 등록합니다. 키워드1이 이미 매칭된 공고는
+            (키워드1 리드로 이미 목록에 뜨므로) 이 조건으로 중복 등록되지 않습니다. 결과 목록·메일에는 실제 매칭된
+            키워드 대신 "사용자지정"으로 표시되고, 해당 공고의 첨부파일은 (내용 검색 없이) 전부 내려받아 함께
+            첨부합니다. 비워두면 이 조건은 사용하지 않습니다. 권장: 낙찰금액 최소를 1,000,000,000(10억)으로 설정.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <TagEditor
+            label="사용자지정 키워드 (= 키워드2)"
+            description="공고 제목만으로 매칭합니다(첨부파일 내용 검색 없음). 자세한 조건은 위 설명 참고."
+            values={secondaryKeywords}
+            onChange={setSecondaryKeywords}
+            emptyHint="비어 있으면 사용자지정 조건을 사용하지 않습니다."
+          />
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="secondaryMinAwardAmount">낙찰금액 최소 (원)</Label>
+              <Input
+                id="secondaryMinAwardAmount"
+                type="number"
+                min={0}
+                placeholder="제한 없음 (권장: 1000000000 = 10억)"
+                value={secondaryMinAwardAmount}
+                onChange={(event) => setSecondaryMinAwardAmount(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="secondaryMaxAwardAmount">낙찰금액 최대 (원)</Label>
+              <Input
+                id="secondaryMaxAwardAmount"
+                type="number"
+                min={0}
+                placeholder="제한 없음"
+                value={secondaryMaxAwardAmount}
+                onChange={(event) => setSecondaryMaxAwardAmount(event.target.value)}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            LH는 실제 낙찰금액을 제공하지 않아, LH 공고에는 이 범위를 기초금액(예산)과 비교합니다. LH는 첨부파일
+            다운로드 링크를 제공하지 않아 제목 매칭만으로 리드를 남기고 첨부파일은 붙지 않습니다.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Mail className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-base">알림 이메일</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <EmailListEditor values={notificationEmails} onChange={setNotificationEmails} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="pt-6 space-y-4">
           {/* 개선(2026-09-15 UX 리뷰, 항목 10) — 저장하기 전에 지금 화면의
           조건이면 결과가 대략 얼마나 될지 미리 보여준다. 실제로는 최근에 이미
           찾아둔 리드 중 지금 조건에도 해당하는 건수를 세는 것이라, 조건을
@@ -592,7 +657,7 @@ export default function Settings() {
           ) : null}
 
           <Button onClick={handleSave} disabled={updateSettings.isPending || !canSave}>
-            {updateSettings.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {updateSettings.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             저장
           </Button>
         </CardContent>
