@@ -159,6 +159,10 @@ export const ExportMatchesCsvResponse = zod.unknown()
 /**
  * @summary Download all matches as XLSX
  */
+export const ExportMatchesXlsxQueryParams = zod.object({
+  "scanRunIds": zod.coerce.string().optional().describe('쉼표로 구분한 scanRunId 목록(2026-09-23 사용자 요청: 자동검색 실행 기록에서 여러 개의 매칭 건수를 선택해 그 결과만 다운로드). 없으면 계정의 누적 매칭 결과 전체를 내려준다.')
+})
+
 export const ExportMatchesXlsxResponse = zod.unknown()
 
 

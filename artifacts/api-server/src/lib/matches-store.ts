@@ -11,11 +11,24 @@ import { command } from "./bid-processing";
 // 야. msjbro에는 admin 의 모든 정보를 공유하지않아... 두 아이디로 입력은
 // 서로 영향을 미치지 않아"): 이 파일의 모든 조회/삭제는 adminUserId로
 // 걸러서, 로그인한 계정 자신의 리드/스캔 기록만 보고 건드리게 한다.
-export async function listAwardedMatches(adminUserId: number, limit = 500): Promise<AwardedMatch[]> {
+// 요구사항(2026-09-23 사용자 요청: "내가 원하는 날짜의 매칭건수를 여러개
+// 선택해서 다운로드 받을 수 있도록 수정해줘"): scanRunIds를 넘기면 그 실행
+// 기록들에서 나온 매칭만 골라 반환한다. 생략하면(undefined) 기존과 동일하게
+// 계정의 전체 누적 매칭을 반환한다 — 화면의 "엑셀 다운로드"가 필터 없을 때
+// 지금까지와 똑같이 전체를 받도록 하기 위함.
+export async function listAwardedMatches(
+  adminUserId: number,
+  limit = 500,
+  scanRunIds?: number[],
+): Promise<AwardedMatch[]> {
+  const conditions = [eq(awardedMatchesTable.adminUserId, adminUserId)];
+  if (scanRunIds && scanRunIds.length > 0) {
+    conditions.push(inArray(awardedMatchesTable.scanRunId, scanRunIds));
+  }
   return db
     .select()
     .from(awardedMatchesTable)
-    .where(eq(awardedMatchesTable.adminUserId, adminUserId))
+    .where(and(...conditions))
     .orderBy(desc(awardedMatchesTable.createdAt))
     .limit(Math.max(1, Math.min(5000, limit)));
 }

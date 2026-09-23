@@ -34,6 +34,7 @@ export * from './bidSearchResultDownloadStatus';
 export * from './bidSearchResultParseStatus';
 export * from './bidSearchResultResultStatus';
 export * from './errorResponse';
+export * from './exportMatchesXlsxParams';
 export * from './healthStatus';
 export * from './listMatchesParams';
 export * from './listScansParams';

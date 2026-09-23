@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Router, type IRouter } from "express";
-import { DownloadMatchAttachmentParams, ListMatchesQueryParams } from "@workspace/api-zod";
+import { DownloadMatchAttachmentParams, ExportMatchesXlsxQueryParams, ListMatchesQueryParams } from "@workspace/api-zod";
 import { buildMatchesXlsx, dedupeSecondaryMatches, listAwardedMatches, sendDownload } from "../lib/matches-store";
 import { resolveMatchAttachmentPath } from "../lib/scan-storage";
 import { searchBusinessContactOnPortal, searchBusinessContactOnWeb } from "../lib/bid-processing";
@@ -52,12 +52,24 @@ router.delete("/matches/duplicates", async (req, res) => {
 
 // 요구사항(2026-09-10 사용자 요청: "csv 다운로드는 없어도 돼. 헷갈려"): 엑셀
 // 다운로드 하나만 남기고 CSV 다운로드는 제거한다.
+// 요구사항(2026-09-23 사용자 요청: "내가 원하는 날짜의 매칭건수를 여러개
+// 선택해서 다운로드 받을 수 있도록 수정해줘"): scanRunIds 쿼리(쉼표로 구분한
+// 실행 기록 id 목록)가 있으면 그 실행들에서 나온 매칭만 담은 엑셀을 내려주고,
+// 없으면(기존 동작 그대로) 계정의 전체 누적 매칭을 내려준다.
 router.get("/matches/export.xlsx", async (req, res) => {
+  const params = ExportMatchesXlsxQueryParams.safeParse(req.query);
+  const scanRunIds = params.success && params.data.scanRunIds
+    ? params.data.scanRunIds
+        .split(",")
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    : undefined;
   try {
-    const matches = await listAwardedMatches(req.session.userId!, 5000);
+    const matches = await listAwardedMatches(req.session.userId!, 5000, scanRunIds);
     const xlsxPath = await buildMatchesXlsx(matches);
     res.type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    sendDownload(res, xlsxPath, "누적_낙찰검색결과.xlsx");
+    const fileName = scanRunIds?.length ? "선택한_낙찰검색결과.xlsx" : "누적_낙찰검색결과.xlsx";
+    sendDownload(res, xlsxPath, fileName);
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : "엑셀 파일을 만들지 못했습니다." });
   }

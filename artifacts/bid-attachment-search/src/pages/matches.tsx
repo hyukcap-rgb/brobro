@@ -5,6 +5,7 @@ import {
   useTriggerScan,
   getListMatchesQueryKey,
   getListScansQueryKey,
+  getExportMatchesXlsxUrl,
 } from "@workspace/api-client-react";
 import { useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -255,18 +256,28 @@ export default function Matches() {
   // 검색결과에 해당 검색결과를 보여주는 방식으로 수정하자"): 실행 기록의 매칭
   // 건수를 클릭하면 그 실행(scanRunId)에서 나온 결과만 위 카드에 걸러서
   // 보여준다. 선택을 해제하면 요구사항 3의 기본값(오늘 결과만)으로 돌아간다.
-  const [selectedScanRunId, setSelectedScanRunId] = useState<number | null>(null);
-  const selectedScan = selectedScanRunId != null ? (scans.find((scan) => scan.id === selectedScanRunId) ?? null) : null;
+  // 확장(2026-09-23 사용자 요청: "내가 원하는 날짜의 매칭건수를 여러개
+  // 선택해서 다운로드 받을 수 있도록 수정해줘"): 단일 선택(number | null)이던
+  // 것을 다중 선택(Set<number>)으로 바꿔, 서로 다른 날짜의 실행 기록 여러
+  // 개를 동시에 선택해 그 결과를 모아 보고 함께 다운로드할 수 있게 한다.
+  const [selectedScanRunIds, setSelectedScanRunIds] = useState<Set<number>>(() => new Set());
+  const selectedScans = scans.filter((scan) => selectedScanRunIds.has(scan.id));
   const todayKey = getKstTodayKey();
   const visibleMatches =
-    selectedScanRunId != null
-      ? matches.filter((match) => match.scanRunId === selectedScanRunId)
+    selectedScanRunIds.size > 0
+      ? matches.filter((match) => match.scanRunId != null && selectedScanRunIds.has(match.scanRunId))
       : matches.filter((match) => getKstDateKeyFromIso(match.createdAt) === todayKey);
   const matchesCardRef = useRef<HTMLDivElement>(null);
   const handleSelectScanRun = (scanId: number) => {
-    setSelectedScanRunId((current) => (current === scanId ? null : scanId));
+    setSelectedScanRunIds((current) => {
+      const next = new Set(current);
+      if (next.has(scanId)) next.delete(scanId);
+      else next.add(scanId);
+      return next;
+    });
     matchesCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+  const clearScanRunSelection = () => setSelectedScanRunIds(new Set());
 
   // 요구사항(2026-09-11 사용자 요청: "검색결과에서 리스트가 너무 끝도없이
   // 나오는데.. 이걸 좀 효과적으로 정리하는 방법이 없을까" — 사용자가 고른 방식:
@@ -345,9 +356,11 @@ export default function Matches() {
   const totalVisibleCount = visibleMatches.length;
   // 다른 실행 기록을 선택하면 완전히 다른 데이터셋이 되므로, 이전 데이터셋
   // 기준으로 보던 페이지 번호를 그대로 들고 있으면 혼란스럽다 — 새로 1페이지로.
+  // selectedScanRunIds는 토글마다 새 Set 객체로 바뀌므로 참조 비교만으로도
+  // 선택이 달라질 때마다 이 effect가 실행된다.
   useEffect(() => {
     setGroupPage(0);
-  }, [selectedScanRunId]);
+  }, [selectedScanRunIds]);
 
   // 버그 수정(2026-09-15 UX 리뷰): "지금 실행"/"이 기간으로 검색"을 누르면
   // POST 요청 자체는 곧바로 끝나 버튼이 바로 다시 눌릴 수 있게 되는데, 실제
@@ -412,6 +425,14 @@ export default function Matches() {
     }
   };
 
+  // 선택된 실행 기록이 있으면 그 실행들에서 나온 결과만 담은 엑셀을, 없으면
+  // (기존과 동일하게) 계정의 전체 누적 결과를 다운로드한다.
+  const selectedScanRunIdsList = [...selectedScanRunIds].sort((a, b) => a - b);
+  const matchesDownloadUrl =
+    selectedScanRunIdsList.length > 0
+      ? getExportMatchesXlsxUrl({ scanRunIds: selectedScanRunIdsList.join(",") })
+      : getExportMatchesXlsxUrl();
+
   const handleDownload = async (url: string, fileName: string) => {
     setDownloadError(null);
     try {
@@ -439,24 +460,36 @@ export default function Matches() {
           <div>
             <CardTitle>일일 검색 결과</CardTitle>
             <CardDescription>
-              {selectedScan ? (
+              {selectedScans.length > 0 ? (
                 <>
                   <ListFilter className="inline h-3.5 w-3.5 mr-1 align-text-bottom" />
-                  실행 기록 하나(대상일 {formatTargetDates(selectedScan.targetDates)}, {formatDateTime(selectedScan.startedAt)})의
-                  매칭 결과만 걸러서 보고 있습니다. 오른쪽의 "필터 해제"를 누르면 오늘 결과로 돌아갑니다.
+                  {selectedScans.length === 1 ? (
+                    <>
+                      실행 기록 하나(대상일 {formatTargetDates(selectedScans[0].targetDates)},{" "}
+                      {formatDateTime(selectedScans[0].startedAt)})의
+                    </>
+                  ) : (
+                    <>
+                      선택한 실행 기록 {selectedScans.length}건(대상일{" "}
+                      {selectedScans.map((scan) => formatTargetDates(scan.targetDates)).join(", ")})의
+                    </>
+                  )}{" "}
+                  매칭 결과만 걸러서 보고 있습니다. 아래 "자동검색" 표에서 매칭 건수를 더 클릭해 추가하거나, 오른쪽의
+                  "필터 해제"를 누르면 오늘 결과로 돌아갑니다.
                 </>
               ) : (
                 <>
                   매일 오전 7시 자동 검색 결과가 여기 누적됩니다. 화면에는 오늘 찾은 결과만 표시되고, 지난 결과는 지워지지
                   않고 계속 쌓입니다 — 지난 결과 전체는 "엑셀 다운로드"로 받아보거나, 아래 "자동검색" 실행 기록의 매칭
-                  건수를 클릭해 확인할 수 있습니다. 현장사무소로 직접 연락해 영업하세요.
+                  건수를 하나 이상 클릭해 원하는 날짜들만 모아서 확인/다운로드할 수 있습니다. 현장사무소로 직접 연락해
+                  영업하세요.
                 </>
               )}
             </CardDescription>
           </div>
           <div className="flex gap-2 shrink-0">
-            {selectedScan ? (
-              <Button variant="outline" size="sm" onClick={() => setSelectedScanRunId(null)}>
+            {selectedScans.length > 0 ? (
+              <Button variant="outline" size="sm" onClick={clearScanRunSelection}>
                 <X className="h-4 w-4" /> 필터 해제
               </Button>
             ) : null}
@@ -465,9 +498,15 @@ export default function Matches() {
             </Button>
             <Button
               size="sm"
-              onClick={() => handleDownload("/api/matches/export.xlsx", "누적_낙찰검색결과.xlsx")}
+              onClick={() =>
+                handleDownload(
+                  matchesDownloadUrl,
+                  selectedScans.length > 0 ? "선택한_낙찰검색결과.xlsx" : "누적_낙찰검색결과.xlsx",
+                )
+              }
             >
-              <Download className="h-4 w-4" /> 엑셀 다운로드
+              <Download className="h-4 w-4" />
+              {selectedScans.length > 0 ? `선택 결과 다운로드 (${selectedScans.length}건)` : "엑셀 다운로드"}
             </Button>
           </div>
         </CardHeader>
@@ -483,8 +522,8 @@ export default function Matches() {
             </div>
           ) : visibleMatches.length === 0 ? (
             <div className="text-sm text-muted-foreground py-8 text-center">
-              {selectedScan
-                ? "이 실행에서 매칭된 결과가 없습니다."
+              {selectedScans.length > 0
+                ? "선택한 실행 기록에서 매칭된 결과가 없습니다."
                 : "오늘 매칭된 결과가 아직 없습니다. 자동 검색은 매일 오전 7시에 실행됩니다."}
             </div>
           ) : (
@@ -946,8 +985,10 @@ export default function Matches() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {scans.map((scan) => (
-                    <TableRow key={scan.id} className={scan.id === selectedScanRunId ? "bg-muted/50" : undefined}>
+                  {scans.map((scan) => {
+                    const isSelected = selectedScanRunIds.has(scan.id);
+                    return (
+                    <TableRow key={scan.id} className={isSelected ? "bg-primary/10" : undefined}>
                       <TableCell>{scanStatusBadge(scan)}</TableCell>
                       <TableCell className="text-xs">{formatTargetDates(scan.targetDates)}</TableCell>
                       <TableCell>{scan.awardsFound}</TableCell>
@@ -955,15 +996,22 @@ export default function Matches() {
                       <TableCell className="font-medium">
                         {/* 요구사항(2026-09-10 사용자 요청 4: "자동검색에서
                         매칭건수를 클릭하면 위에 검색결과에 해당 검색결과를
-                        보여주는 방식으로 수정하자") */}
+                        보여주는 방식으로 수정하자") / 확장(2026-09-23 사용자
+                        요청: "여러개 선택해서 다운로드") — 여러 행을 동시에
+                        선택할 수 있는 다중 선택 토글. 선택된 행은 굵게 +
+                        체크표시로 표시한다. */}
                         {scan.matchesFound > 0 ? (
                           <button
                             type="button"
                             onClick={() => handleSelectScanRun(scan.id)}
-                            className="inline-flex items-center gap-1 text-primary hover:underline"
-                            title="이 실행의 매칭 결과만 위에서 보기"
+                            className={
+                              isSelected
+                                ? "inline-flex items-center gap-1 rounded-md bg-primary/15 px-1.5 py-0.5 text-primary"
+                                : "inline-flex items-center gap-1 text-primary hover:underline"
+                            }
+                            title={isSelected ? "선택 해제" : "이 실행의 매칭 결과를 위에 함께 보기(여러 개 선택 가능)"}
                           >
-                            <ListFilter className="h-3 w-3" />
+                            {isSelected ? <Check className="h-3 w-3" /> : <ListFilter className="h-3 w-3" />}
                             {scan.matchesFound}
                           </button>
                         ) : (
@@ -984,7 +1032,8 @@ export default function Matches() {
                         )}
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>

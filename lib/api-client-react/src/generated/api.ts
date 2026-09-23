@@ -29,6 +29,7 @@ import type {
   BidImportInput,
   BidImportResult,
   ErrorResponse,
+  ExportMatchesXlsxParams,
   HealthStatus,
   ListMatchesParams,
   ListScansParams,
@@ -594,20 +595,27 @@ export function useExportMatchesCsv<TData = Awaited<ReturnType<typeof exportMatc
 
 
 
-export const getExportMatchesXlsxUrl = () => {
+export const getExportMatchesXlsxUrl = (params?: ExportMatchesXlsxParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/api/matches/export.xlsx`
+  return stringifiedParams.length > 0 ? `/api/matches/export.xlsx?${stringifiedParams}` : `/api/matches/export.xlsx`
 }
 
 /**
  * @summary Download all matches as XLSX
  */
-export const exportMatchesXlsx = async ( options?: Parameters<typeof customFetch>[1]): Promise<Blob> => {
+export const exportMatchesXlsx = async (params?: ExportMatchesXlsxParams, options?: Parameters<typeof customFetch>[1]): Promise<Blob> => {
 
-  return customFetch<Blob>(getExportMatchesXlsxUrl(),
+  return customFetch<Blob>(getExportMatchesXlsxUrl(params),
   {
     ...options,
     method: 'GET'
@@ -620,23 +628,23 @@ export const exportMatchesXlsx = async ( options?: Parameters<typeof customFetch
 
 
 
-export const getExportMatchesXlsxQueryKey = () => {
+export const getExportMatchesXlsxQueryKey = (params?: ExportMatchesXlsxParams,) => {
     return [
-    `/api/matches/export.xlsx`
+    `/api/matches/export.xlsx`, ...(params ? [params] : [])
     ] as const;
     }
 
 
-export const getExportMatchesXlsxQueryOptions = <TData = Awaited<ReturnType<typeof exportMatchesXlsx>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof exportMatchesXlsx>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getExportMatchesXlsxQueryOptions = <TData = Awaited<ReturnType<typeof exportMatchesXlsx>>, TError = ErrorType<unknown>>(params?: ExportMatchesXlsxParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof exportMatchesXlsx>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getExportMatchesXlsxQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getExportMatchesXlsxQueryKey(params);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof exportMatchesXlsx>>> = ({ signal }) => exportMatchesXlsx({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof exportMatchesXlsx>>> = ({ signal }) => exportMatchesXlsx(params, { signal, ...requestOptions });
 
 
 
@@ -654,11 +662,11 @@ export type ExportMatchesXlsxQueryError = ErrorType<unknown>
  */
 
 export function useExportMatchesXlsx<TData = Awaited<ReturnType<typeof exportMatchesXlsx>>, TError = ErrorType<unknown>>(
-  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof exportMatchesXlsx>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+ params?: ExportMatchesXlsxParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof exportMatchesXlsx>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getExportMatchesXlsxQueryOptions(options)
+  const queryOptions = getExportMatchesXlsxQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
