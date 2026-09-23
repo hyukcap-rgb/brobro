@@ -234,6 +234,33 @@ export async function ensureSchema(): Promise<void> {
              ) <= 0
         );
 
+    -- 요구사항(2026-09-23 사용자 리포트: "이 결과는 다 같은거 같은데 왜
+    -- 중복으로 나오는거야?" — 스크린샷 확인, "2026년 토하마을 조성사업"/
+    -- "2026. 진남초 급식소..." 등에서 완전히 동일해 보이는 행이 2개씩 노출됨):
+    -- 실제 데이터 조회로 원인 확인 — 같은 공고·같은 첨부파일·같은 매칭키워드·
+    -- 같은 수량인데 surroundingText(셀 위치)만 다른 행이 저장돼 있었다.
+    -- 내역서 엑셀에 총괄내역서/산출내역서처럼 같은 항목이 서로 다른 시트·행에
+    -- 두 번 적혀 있어 extractSegments가 그 두 줄을 각각 별도 매칭으로 반환한
+    -- 것(daily-scan.ts에 위와 같은 중복 방지 로직 추가로 새 행은 더 이상
+    -- 이렇게 쌓이지 않음 — 아래는 이미 쌓인 기존 행 정리). id가 더 작은 행
+    -- 하나만 남기고, 같은 (계정, 사이트, 공고, 매칭키워드, 첨부파일명, 수량)
+    -- 조합의 나머지는 지운다. quantity_text가 있는 행(=나라장터 1차 키워드
+    -- 매칭)만 대상으로 한다 — "사용자지정"(2차 키워드)과 LH는 quantity_text를
+    -- 쓰지 않아(NULL) 이 조건에 해당하지 않고, "사용자지정" 중복은 이미
+    -- dedupeSecondaryMatches(관리자 전용 API)가 별도로 처리한다. 정리 이후로는
+    -- 이 조건에 해당하는 새 행이 생기지 않으므로 매 부팅 재실행해도 안전하다
+    -- (멱등, 재실행 시 0건 삭제).
+    DELETE FROM awarded_matches a
+      USING awarded_matches b
+      WHERE a.quantity_text IS NOT NULL
+        AND a.id > b.id
+        AND a.admin_user_id = b.admin_user_id
+        AND a.source = b.source
+        AND a.notice_number = b.notice_number
+        AND a.matched_keyword = b.matched_keyword
+        AND a.attachment_file_name = b.attachment_file_name
+        AND a.quantity_text = b.quantity_text;
+
     -- 요구사항(2026-09-11 사용자 제안: "전일 공사 항목의 첨부파일을 서버에
     -- 저장하고 서버에 저장한 파일을 키워드 검색하면 어떨까"): 공고 상세정보(첨부
     -- 파일 URL, 예산, 업무구분 등)는 공고 등록 후 바뀌지 않는데도, 최근 3일

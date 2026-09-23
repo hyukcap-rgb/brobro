@@ -1096,6 +1096,30 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
             }
           }
 
+          // 요구사항(2026-09-23 사용자 리포트: "이 결과는 다 같은거 같은데 왜
+          // 중복으로 나오는거야?" — 스크린샷으로 확인, "2026년 토하마을
+          // 조성사업"/"2026. 진남초 급식소..." 등에서 완전히 동일해 보이는 행이
+          // 2개씩 노출됨. 실제 저장된 데이터를 직접 조회해 원인 확인: 같은
+          // 공고·같은 첨부파일·같은 매칭키워드·같은 수량("783 kg", "2 M2")인데
+          // surroundingText(셀 위치)만 다른 두 행이 저장돼 있었다 — 내역서
+          // 엑셀에 총괄내역서/산출내역서처럼 같은 항목이 서로 다른 시트·행에 두
+          // 번 적혀 있어서 extractSegments가 그 두 줄을 각각 별도 매칭으로
+          // 반환한 것. 2026-09-19에 유니크 인덱스에 surroundingText를 추가한
+          // 것은 "정말 다른 두 매칭(예: 87㎡ 한 줄, 263㎡ 다른 줄)은 둘 다
+          // 보여준다"는 의도였는데, "같은 수량이 같은 파일에 두 번 적힌 경우"까지
+          // 함께 통과시키는 부작용이 있었다. 같은 첨부파일 안에서 같은
+          // 매칭키워드로 수량·단위까지 완전히 같은 매칭은 실제로는 같은 항목을
+          // 한 번 더 언급한 것일 뿐이므로 첫 번째 것만 남긴다(개수/1,000㎡ 판정도
+          // 이 중복 제거 후 기준으로 한다). 서로 다른 첨부파일에 우연히 같은
+          // 수량이 나오는 경우는 다른 항목일 수 있어 그대로 둔다.
+          const seenPendingKeys = new Set<string>();
+          const dedupedPendingInserts = pendingInserts.filter((entry) => {
+            const key = `${entry.values.attachmentFileName ?? ""}::${entry.values.matchedKeyword}::${entry.values.quantityText ?? ""}`;
+            if (seenPendingKeys.has(key)) return false;
+            seenPendingKeys.add(key);
+            return true;
+          });
+
           // 요구사항(2026-09-18 사용자 요청: "검색 결과에서 1,000m2 이하 하나만
           // 검색되는 공고를 삭제해줘. 무슨뜻이냐 하면 첨부파일에서 부직포 키워드로
           // 100m2 하나와 10000m2 이렇게 두개가 검색되면 지금처럼 그대로 보여주고,
@@ -1109,9 +1133,9 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           // 단위가 전혀 다른 수량까지 같은 "1000 이하"로 재단하면 오히려 정상적인
           // 리드를 놓칠 수 있어서다.
           const AREA_UNITS = new Set(["㎡", "m²", "m2", "M2"]);
-          let finalInserts = pendingInserts;
-          if (pendingInserts.length === 1) {
-            const only = pendingInserts[0];
+          let finalInserts = dedupedPendingInserts;
+          if (dedupedPendingInserts.length === 1) {
+            const only = dedupedPendingInserts[0];
             if (
               only.unit &&
               AREA_UNITS.has(only.unit) &&
