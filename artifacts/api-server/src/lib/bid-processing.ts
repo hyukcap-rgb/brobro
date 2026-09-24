@@ -1054,18 +1054,35 @@ export function extractItemFields(text: string, keywords: readonly string[] = DE
   // 뒤따르지 않는지를 직접 확인하는 방식으로 대체한다.
   const quantityMatch = [...text.matchAll(ITEM_QUANTITY_UNIT_PATTERN)][0];
   const amount = text.match(/(?:금액|합계)\s*[:：]?\s*([0-9][0-9,]*)\s*원?/i)?.[1];
+  // 요구사항(2026-09-24 사용자 리포트: "부직포는 1000m2 이하는 검색하지
+  // 말라고 했는데.. 단위가 m 으로 되어 있어서 최소조건을 검색하지
+  // 못하나봐"): 실제 데이터로 원인을 확인(예: R26BK01726461-000 공고
+  // "A16=비계주의 보호망 설치 및 해체 | B16=H=4m 이하 (부직포) | C16=276 |
+  // D16=㎡" — 진짜 수량은 C16=276/D16=㎡인데, 이름/규격 칸(B16)에 섞여 있는
+  // "H=4m"이 먼저 매칭돼 "4 m"로 잘못 표시됨. R26BK01732642-000 공고도
+  // "길이85m*폭1.2m" 규격 문구의 "85m"이 진짜 수량(M11=1323.52, 단위 M2)
+  // 대신 잡힘). quantityMatch(전체 텍스트를 한 번에 훑는 정규식)는 칸 경계를
+  // 모르기 때문에, 수량/단위가 서로 다른 칸에 있어도 이름·규격 칸에 우연히
+  // 섞여 있는 치수 표기("H=4m", "85m*1.2m" 등)를 진짜 수량보다 먼저 찾아버릴
+  // 수 있다. 반면 위 unitIndex/adjacentQuantity는 칸 전체가 정확히 숫자만
+  // 또는 정확히 단위만인 경우에만 인정하므로 이런 치수 표기에 낚이지 않는다
+  // — 그래서 "서로 다른 칸에 나뉘어 있는 진짜 수량+단위 쌍"을 찾으면
+  // quantityMatch보다 우선한다. quantityMatch는 "11.7 ㎡"처럼 수량+단위가
+  // 애초에 한 칸(또는 구분자 없는 한 토큰)에 붙어 있어 칸 단위로는 못 찾는
+  // 경우에만 대체 수단으로 쓴다.
+  const hasCellPair = adjacentQuantity !== undefined && unitIndex >= 0;
+  const rawQuantity = hasCellPair ? adjacentQuantity : quantityMatch?.[1] ?? adjacentQuantity;
   // 요구사항(2026-09-11 사용자 요청: "일일 검색결과에서 수량에 소숫점 이하가
   // 무한대일때 무한대로 나오네. 소수점 이하는 절삭해서 보여줘"): 원문 첨부파일
   // (엑셀→PDF 변환 등)의 부동소수점 오차로 소수점 이하 자릿수가 끝없이 길게
   // 찍히는 경우가 있어, 화면/CSV에 그대로 노출하면 숫자가 "무한히" 이어지는
   // 것처럼 보인다. 반올림이 아니라 절삭(소수점 이하 버림)으로 정수부만 남긴다.
-  const rawQuantity = quantityMatch?.[1] ?? adjacentQuantity;
   const itemQuantity = rawQuantity ? rawQuantity.split(".")[0] : undefined;
   return {
     itemName: keywordIndex >= 0 ? cellValues[keywordIndex] : "미공개/확인불가",
     itemSpecification: specification ?? "미공개/확인불가",
     itemQuantity: itemQuantity ?? "미공개/확인불가",
-    itemUnit: quantityMatch?.[2] ?? (unitIndex >= 0 ? cellValues[unitIndex] : "미공개/확인불가"),
+    itemUnit: hasCellPair ? cellValues[unitIndex] : quantityMatch?.[2] ?? (unitIndex >= 0 ? cellValues[unitIndex] : "미공개/확인불가"),
     itemAmount: amount ?? "미공개/확인불가",
   };
 }
