@@ -124,6 +124,15 @@ export async function deleteAllScanData(
 // (source, noticeNumber) 조합의 "사용자지정" 행이 여러 개면 가장 먼저 저장된
 // 것(id가 가장 작은 것) 하나만 남기고 나머지는 지운다. 관리자가 필요할 때
 // 직접 호출하는 일회성 정리용이라 화면 버튼은 만들지 않는다.
+// 공고를 식별하는 기준(같은 사이트 + 같은 공고번호)을 한 곳에 모은다.
+// dedupeSecondaryMatches/groupMatchesByNotice 둘 다 같은 조합으로 "같은
+// 공고"를 판단하므로(코드 중복 정리, 2026-09-24 최적화 검토), 문자열 조합
+// 로직을 여기 하나로 합쳤다 — 두 함수가 선택하는 컬럼 집합은 서로 달라도
+// (부분 조회 vs 전체 행) {source, noticeNumber}만 있으면 그대로 쓸 수 있다.
+function noticeGroupKey(match: { source: string; noticeNumber: string }): string {
+  return `${match.source}::${match.noticeNumber}`;
+}
+
 export async function dedupeSecondaryMatches(adminUserId: number): Promise<{ deletedCount: number }> {
   const rows = await db
     .select({
@@ -140,7 +149,7 @@ export async function dedupeSecondaryMatches(adminUserId: number): Promise<{ del
   const seen = new Set<string>();
   const idsToDelete: number[] = [];
   for (const row of rows) {
-    const key = `${row.source}::${row.noticeNumber}`;
+    const key = noticeGroupKey(row);
     if (seen.has(key)) {
       idsToDelete.push(row.id);
     } else {
@@ -176,7 +185,7 @@ export function groupMatchesByNotice(matches: AwardedMatch[]): MatchNoticeGroup[
   const groups: MatchNoticeGroup[] = [];
   const indexByKey = new Map<string, number>();
   for (const match of matches) {
-    const key = `${match.source}::${match.noticeNumber}`;
+    const key = noticeGroupKey(match);
     const existingIndex = indexByKey.get(key);
     if (existingIndex == null) {
       indexByKey.set(key, groups.length);
