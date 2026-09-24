@@ -313,6 +313,35 @@ export default function Matches() {
     });
   };
 
+  // 요구사항(2026-09-24 사용자 요청: "하나의 공고에서 여러개의 키워드가
+  // 검색되면 지금처럼 리스트 모두를 보여주지 말고 키워드/수량에 검출수를
+  // 외2건, 외3건 같은 방식으로 표현해주고 하나의 공고는 하나의 리스트로
+  // 표현해줘. 같은 리스트가 여러번 나오니까 오류가 난것같아"): 한 공고에서
+  // 키워드가 여러 개 매칭되면(정상 동작 — daily-scan.ts가 키워드별로 각각
+  // 저장) 지금까지는 매칭마다 별도 행으로 보여서, 실제로는 정상인데도 같은
+  // 공고가 여러 번 반복되는 것처럼 보여 오류로 오인하기 쉬웠다. 화면에서만
+  // 같은 공고(같은 사이트·공고번호)의 매칭을 한 행으로 묶고, 대표 매칭 1건의
+  // 키워드·수량을 보여주되 나머지는 "외N건"으로 표시한다. 저장되는 데이터·
+  // 엑셀 다운로드·메일 발송 로직은 그대로 유지된다(모든 매칭이 그대로
+  // 저장·다운로드된다) — 여기서는 화면에 보여주는 방식만 바꾼다.
+  type MatchGroup = { key: string; representative: (typeof visibleMatches)[number]; count: number };
+
+  const groupByNotice = (items: typeof visibleMatches): MatchGroup[] => {
+    const groups: MatchGroup[] = [];
+    const indexByKey = new Map<string, number>();
+    for (const match of items) {
+      const key = `${match.source}::${match.noticeNumber}`;
+      const existingIndex = indexByKey.get(key);
+      if (existingIndex == null) {
+        indexByKey.set(key, groups.length);
+        groups.push({ key, representative: match, count: 1 });
+      } else {
+        groups[existingIndex].count += 1;
+      }
+    }
+    return groups;
+  };
+
   const dateGroups = useMemo(() => {
     const groups = new Map<string, typeof visibleMatches>();
     for (const match of visibleMatches) {
@@ -340,9 +369,14 @@ export default function Matches() {
           return sortDir === "asc" ? cmp : -cmp;
         });
       }
-      return { dateKey, items };
+      return { dateKey, items, noticeGroups: groupByNotice(items) };
     });
   }, [visibleMatches, sortColumn, sortDir]);
+
+  const totalNoticeCount = useMemo(
+    () => dateGroups.reduce((sum, group) => sum + group.noticeGroups.length, 0),
+    [dateGroups],
+  );
 
   // 요구사항: 날짜 묶음 단위로 페이지를 나눠 한 화면 길이를 제한한다.
   const DATE_GROUPS_PER_PAGE = 10;
@@ -533,7 +567,7 @@ export default function Matches() {
             // 건을 한 화면에서 스캔하며 비교하기 쉽게 한다.
             <>
               <div className="text-xs text-muted-foreground">
-                총 {totalVisibleCount}건 · {dateGroups.length}일
+                총 {totalNoticeCount}건 (키워드 매칭 {totalVisibleCount}건) · {dateGroups.length}일
               </div>
               {/* 요구사항(2026-09-12 사용자 요청: "검색결과에 가로 스크롤이
               생겼는데 안생기도록 내용 사이즈를 조정해줘"): 컬럼마다 nowrap +
@@ -616,7 +650,7 @@ export default function Matches() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pageGroups.map(({ dateKey, items }) => {
+                    {pageGroups.map(({ dateKey, noticeGroups }) => {
                       const isCollapsed = collapsedDates.has(dateKey);
                       return (
                         <Fragment key={dateKey}>
@@ -632,14 +666,14 @@ export default function Matches() {
                                 ) : (
                                   <ChevronDown className="h-4 w-4" />
                                 )}
-                                {dateKey} ({items.length}건)
+                                {dateKey} ({noticeGroups.length}건)
                               </button>
                             </TableCell>
                           </TableRow>
                           {isCollapsed
                             ? null
-                            : items.map((match) => (
-                    <TableRow key={match.id}>
+                            : noticeGroups.map(({ key: groupKey, representative: match, count }) => (
+                    <TableRow key={groupKey}>
                       <TableCell className="px-2 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
                           {/* 개선(2026-09-15 UX 리뷰): 리드가 나라장터에서 왔는지
@@ -676,10 +710,14 @@ export default function Matches() {
                       눈에 띄게 보여준다. */}
                       <TableCell className="px-2">
                         {match.matchedKeyword ? (
-                          <span className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-xs font-semibold text-primary whitespace-normal">
+                          <span
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-xs font-semibold text-primary whitespace-normal"
+                            title={count > 1 ? `이 공고에서 키워드가 총 ${count}건 매칭되었습니다.` : undefined}
+                          >
                             <Package className="h-3.5 w-3.5 shrink-0" />
                             <span className="min-w-0 truncate">{match.matchedKeyword}</span>
                             {match.quantityText ? <span className="shrink-0">· {match.quantityText}</span> : null}
+                            {count > 1 ? <span className="shrink-0">· 외{count - 1}건</span> : null}
                           </span>
                         ) : (
                           "-"

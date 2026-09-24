@@ -29,7 +29,7 @@ import { fetchLhAwardsForDate, type LhBidItem } from "./lh-source";
 import { getAppSettings } from "./settings";
 import { kstToday, shiftKstDate, isKoreanHoliday, type KstDate } from "./kr-holidays";
 import { SCAN_ROOT, resolveMatchAttachmentPath } from "./scan-storage";
-import { listAwardedMatchesForRun } from "./matches-store";
+import { groupMatchesByNotice, listAwardedMatchesForRun } from "./matches-store";
 import { sendScanResultEmail, type ScanResultEmailAttachment } from "./mailer";
 import { logger } from "./logger";
 
@@ -1538,26 +1538,43 @@ async function sendScheduleResultEmailIfNeeded(run: DailyScanRun): Promise<void>
     const matches = await listAwardedMatchesForRun(run.id);
     if (matches.length === 0) return;
 
+    // 요구사항(2026-09-24 사용자 요청: "하나의 공고에서 여러개의 키워드가
+    // 발견되면 키워드별로 검색하는건 맞지만 메일로 같은 첨부파일은 하나만
+    // 보내줘"): 화면/표에는 키워드마다 별도 행으로 보여주는 게 맞지만(그대로
+    // 유지), 같은 공고에서 키워드가 여러 개 매칭돼도 실제로는 같은 첨부파일
+    // (attachmentStoredPath)을 가리키는 경우가 많다 — 메일에 그 파일이
+    // 매칭 건수만큼 중복 첨부되지 않도록, 이미 첨부한 파일(경로 기준)은
+    // 다시 첨부하지 않는다.
     const attachments: ScanResultEmailAttachment[] = [];
+    const attachedStoredPaths = new Set<string>();
     for (const match of matches) {
       if (match.attachmentDeletedAt || !match.attachmentStoredPath) continue;
+      if (attachedStoredPaths.has(match.attachmentStoredPath)) continue;
       try {
         const filePath = await resolveMatchAttachmentPath(match.attachmentStoredPath);
         attachments.push({ filename: match.attachmentFileName || path.basename(filePath), path: filePath });
+        attachedStoredPaths.add(match.attachmentStoredPath);
       } catch (error) {
         logger.warn({ err: error, matchId: match.id }, "일일 검색결과 메일: 첨부파일 준비 실패 - 건너뜀");
       }
     }
 
+    // 요구사항(2026-09-24 사용자 요청: "엑셀다운로드, 메일발송에도 하나의
+    // 공고에 여러개의 키워드라면 그냥 하나의 공고와 여러개 키워드 몇개가
+    // 나왔는지만 표현해줘"): 메일 본문 표도 화면(matches.tsx)과 같은 기준으로
+    // 공고 단위로 묶는다 — 같은 공고에서 매칭된 키워드가 여러 개면 대표
+    // 키워드 뒤에 "외N건"만 붙이고 한 줄로 보여준다.
+    const noticeGroups = groupMatchesByNotice(matches);
+
     await sendScanResultEmail({
       to: settings.notificationEmails,
       dateLabel: formatDateLabel(run.targetDates),
-      matches: matches.map((match) => ({
+      matches: noticeGroups.map(({ representative: match, count }) => ({
         siteName: match.siteName,
         noticeName: match.noticeName,
         demandAgency: match.demandAgency,
         bidderName: match.bidderName,
-        matchedKeyword: match.matchedKeyword,
+        matchedKeyword: count > 1 ? `${match.matchedKeyword} 외${count - 1}건` : match.matchedKeyword,
         quantityText: match.quantityText,
         attachmentFileName: match.attachmentFileName,
       })),

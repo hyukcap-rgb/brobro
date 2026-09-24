@@ -58,6 +58,11 @@ function escapeHtml(value: string): string {
 
 const TABLE_HEADERS = ["현장명(공고명)", "발주기관", "낙찰자", "매칭 키워드", "수량", "첨부파일"];
 
+// 요구사항(2026-09-24 사용자 요청: "엑셀다운로드, 메일발송에도 하나의
+// 공고에 여러개의 키워드라면 그냥 하나의 공고와 여러개 키워드 몇개가
+// 나왔는지만 표현해줘"): 호출부(daily-scan.ts)가 이제 매칭을 공고 단위로
+// 묶어서 넘기므로(매칭키워드 칸에 "외N건" 포함), 여기 params.matches는
+// "매칭 건수"가 아니라 "공고 건수"다 — 안내 문구도 그에 맞춘다.
 function buildHtml(params: ScanResultEmailParams): string {
   const rows = params.matches
     .map((match) => {
@@ -79,7 +84,7 @@ function buildHtml(params: ScanResultEmailParams): string {
   ).join("");
   return `
     <div style="font-family:sans-serif;font-size:14px;color:#222;">
-      <p>${params.dateLabel}일 나라장터 낙찰공고 자동 검색에서 ${params.matches.length}건의 신규 매칭을 찾았습니다.</p>
+      <p>${params.dateLabel}일 나라장터 낙찰공고 자동 검색에서 ${params.matches.length}건의 신규 공고를 찾았습니다.</p>
       <table style="border-collapse:collapse;margin-top:12px;">
         <thead><tr>${headerCells}</tr></thead>
         <tbody>${rows}</tbody>

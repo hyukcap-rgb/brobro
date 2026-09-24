@@ -155,6 +155,47 @@ export async function dedupeSecondaryMatches(adminUserId: number): Promise<{ del
   return { deletedCount: deleted.length };
 }
 
+// 요구사항(2026-09-24 사용자 요청: "엑셀다운로드, 메일발송에도 하나의
+// 공고에 여러개의 키워드라면 그냥 하나의 공고와 여러개 키워드 몇개가
+// 나왔는지만 표현해줘"): 화면(matches.tsx)에서는 같은 공고(같은
+// source+noticeNumber)의 여러 키워드 매칭을 한 행 + "외N건"으로 묶어
+// 보여주는데, 엑셀 다운로드·메일 발송은 여전히 매칭마다 별도 행/안내로
+// 나가고 있었다. 화면과 동일한 기준으로 매칭을 공고 단위로 묶어 대표 매칭
+// 1건과 총 매칭 건수(그리고 "내역서" 첨부 여부 판정 등에 쓰이는 전체
+// 구성원)를 함께 반환한다. matches는 보통 listAwardedMatches/
+// listAwardedMatchesForRun(둘 다 desc createdAt)로 넘어오므로, 같은 공고의
+// 첫 등장이 가장 최근 매칭이고 그것을 대표로 삼는다.
+export interface MatchNoticeGroup {
+  key: string;
+  representative: AwardedMatch;
+  count: number;
+  members: AwardedMatch[];
+}
+
+export function groupMatchesByNotice(matches: AwardedMatch[]): MatchNoticeGroup[] {
+  const groups: MatchNoticeGroup[] = [];
+  const indexByKey = new Map<string, number>();
+  for (const match of matches) {
+    const key = `${match.source}::${match.noticeNumber}`;
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex == null) {
+      indexByKey.set(key, groups.length);
+      groups.push({ key, representative: match, count: 1, members: [match] });
+    } else {
+      const group = groups[existingIndex];
+      group.count += 1;
+      group.members.push(match);
+    }
+  }
+  return groups;
+}
+
+// 대표 매칭의 키워드에, 같은 공고에서 매칭이 더 있으면 "외N건"을 덧붙인다
+// (matches.tsx 화면 표시와 동일한 문구).
+function formatMatchedKeywordCell(representative: AwardedMatch, count: number): string {
+  return count > 1 ? `${representative.matchedKeyword} 외${count - 1}건` : representative.matchedKeyword;
+}
+
 const MATCH_HEADERS = [
   "공고번호", "현장명(공고명)", "발주기관", "업무구분", "공종", "낙찰자", "사업자등록번호",
   // 요구사항(2026-09-13: 사업자 주소와 실제 공사현장 주소를 둘 다 보여줌).
@@ -170,7 +211,7 @@ const CONTACT_SOURCE_LABELS: Record<string, string> = {
   web: "웹 검색 추정(확인 필요)",
 };
 
-function matchRow(match: AwardedMatch): string[] {
+function matchRow(match: AwardedMatch, keywordCount = 1): string[] {
   return [
     match.noticeNumber,
     match.siteName ?? match.noticeName ?? "",
@@ -189,7 +230,7 @@ function matchRow(match: AwardedMatch): string[] {
     match.budgetAmount != null ? String(match.budgetAmount) : "",
     match.awardAmount != null ? String(match.awardAmount) : "",
     match.awardDate ?? "",
-    match.matchedKeyword,
+    formatMatchedKeywordCell(match, keywordCount),
     match.attachmentFileName ?? "",
     match.createdAt.toISOString(),
   ];
@@ -229,30 +270,6 @@ function hasBillOfQuantitiesAttachment(matchesForNotice: AwardedMatch[]): boolea
   return matchesForNotice.some((match) => (match.attachmentFileName ?? "").includes(BILL_OF_QUANTITIES_MARKER));
 }
 
-// matches는 listAwardedMatches에서 이미 최신순(desc createdAt)으로 넘어오므로,
-// 같은 공고(=같은 source+noticeNumber)의 첫 등장이 가장 최근 매칭이다 — 그걸
-// 대표 행으로 남긴다.
-function selectMatchesWithoutBillOfQuantities(matches: AwardedMatch[]): AwardedMatch[] {
-  const groups = new Map<string, AwardedMatch[]>();
-  for (const match of matches) {
-    const key = `${match.source}::${match.noticeNumber}`;
-    const group = groups.get(key);
-    if (group) group.push(match);
-    else groups.set(key, [match]);
-  }
-  const result: AwardedMatch[] = [];
-  const seen = new Set<string>();
-  for (const match of matches) {
-    const key = `${match.source}::${match.noticeNumber}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (!hasBillOfQuantitiesAttachment(groups.get(key)!)) {
-      result.push(match);
-    }
-  }
-  return result;
-}
-
 function buildSheetXml(rows: string[][]): string {
   const sheetRows = rows
     .map((row, rowIndex) => {
@@ -269,8 +286,14 @@ function buildSheetXml(rows: string[][]): string {
 }
 
 export async function buildMatchesXlsx(matches: AwardedMatch[]): Promise<string> {
-  const sheet1Rows = [MATCH_HEADERS, ...matches.map(matchRow)];
-  const sheet2Rows = [MATCH_HEADERS, ...selectMatchesWithoutBillOfQuantities(matches).map(matchRow)];
+  // 요구사항(2026-09-24: 엑셀도 공고 단위로 한 행 + "외N건"): 시트1(누적결과)은
+  // 공고 단위로 묶은 모든 그룹, 시트2("내역서 없는 공고")는 그중 매칭된
+  // 첨부파일 어디에도 "내역서"가 없는 공고만 추린다(2026-09-18 요구사항과
+  // 동일한 기준 — 판정은 그룹 안의 모든 매칭 첨부파일명을 본다).
+  const noticeGroups = groupMatchesByNotice(matches);
+  const sheet1Rows = [MATCH_HEADERS, ...noticeGroups.map((group) => matchRow(group.representative, group.count))];
+  const sheet2Groups = noticeGroups.filter((group) => !hasBillOfQuantitiesAttachment(group.members));
+  const sheet2Rows = [MATCH_HEADERS, ...sheet2Groups.map((group) => matchRow(group.representative, group.count))];
   const workbookDir = await mkdtemp(path.join(tmpdir(), "matches-xlsx-"));
   await mkdir(path.join(workbookDir, "_rels"), { recursive: true });
   await mkdir(path.join(workbookDir, "xl", "_rels"), { recursive: true });
