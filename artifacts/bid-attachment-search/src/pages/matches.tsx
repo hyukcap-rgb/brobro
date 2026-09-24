@@ -367,7 +367,8 @@ export default function Matches() {
         items.sort((x, y) => {
           let cmp = 0;
           if (sortColumn === "budgetAmount") {
-            cmp = (x.budgetAmount ?? x.awardAmount ?? 0) - (y.budgetAmount ?? y.awardAmount ?? 0);
+            // 요구사항(2026-09-24: "규모는 예산이 아니라 낙찰가로 변경하자")
+            cmp = (x.awardAmount ?? x.budgetAmount ?? 0) - (y.awardAmount ?? y.budgetAmount ?? 0);
           } else {
             cmp = (x.bidderName ?? "").localeCompare(y.bidderName ?? "", "ko");
           }
@@ -750,15 +751,20 @@ export default function Matches() {
                       {/* 개선(2026-09-15 UX 리뷰): "규모"가 추정가격(예산)인지
                       실제 낙찰금액인지 구분 없이 같은 자리에 표시돼, 전화영업
                       중에 실제와 다른 금액을 말할 위험이 있었다. 어느 쪽인지
-                      작은 라벨로 밝힌다. */}
+                      작은 라벨로 밝힌다.
+                      요구사항(2026-09-24 사용자 요청: "규모는 예산이 아니라
+                      낙찰가로 변경하자. 검색하는 모든건 낙찰건만 대상이니까
+                      그게 정확할것 같아"): 예산은 낙찰 전 추정치라 실제
+                      낙찰금액이 있으면 그게 더 정확하다 — 낙찰금액이 있으면
+                      우선 보여주고(낙찰금액이 없는 LH 등은 예산으로 대체). */}
                       <TableCell className="px-2 text-muted-foreground">
                         <div className="flex items-center gap-1">
-                          {match.budgetAmount != null ? (
-                            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px]">예산</span>
-                          ) : match.awardAmount != null ? (
+                          {match.awardAmount != null ? (
                             <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px]">낙찰</span>
+                          ) : match.budgetAmount != null ? (
+                            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px]">예산</span>
                           ) : null}
-                          <span className="min-w-0 truncate">{formatAmount(match.budgetAmount ?? match.awardAmount)}</span>
+                          <span className="min-w-0 truncate">{formatAmount(match.awardAmount ?? match.budgetAmount)}</span>
                         </div>
                       </TableCell>
                       {/* 요구사항(2026-09-13 사용자 요청: "낙찰받은 사람의 사무실과

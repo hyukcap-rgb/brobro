@@ -798,9 +798,17 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         // 1차 매칭과 동일하게 보관/열람/메일 첨부가 되게 한다.
         let primaryMatchedAny = false;
         primaryPipeline: {
-        // 요구사항 3: 공사 규모 필터 (최종 확인).
+        // 요구사항 3: 공사 규모 필터 (최종 확인). budgetAmount(예산)는 화면/엑셀에
+        // 그대로 저장·표시할 값이라 계산 방식을 바꾸지 않는다.
         const budgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0);
-        if (budgetAmount < settings.minBudgetAmount) {
+        // 요구사항(2026-09-24 사용자 요청: "규모는 예산이 아니라 낙찰가로
+        // 변경하자. 검색하는 모든건 낙찰건만 대상이니까 그게 정확할것
+        // 같아"): "최소 공사 규모" 통과 여부는 예산(추정치, bdgtAmt)보다 실제
+        // 낙찰금액(sucsfbidAmt)이 있으면 그걸 우선해서 판단한다 — 이 시점에는
+        // 이미 낙찰자가 확정된 건만 남아 있어 낙찰금액이 예산보다 정확하다.
+        // 낙찰금액이 없는 예외적인 경우에만 예산(budgetAmount)으로 판단한다.
+        const scaleAmount = Number(award.sucsfbidAmt ?? 0) || budgetAmount;
+        if (scaleAmount < settings.minBudgetAmount) {
           funnel.skippedBudget += 1;
           break primaryPipeline;
         }

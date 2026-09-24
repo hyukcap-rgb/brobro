@@ -393,7 +393,11 @@ export default function Settings() {
       if (maxEstimatedPrice.trim() !== "" && (estimated == null || estimated > Number(maxEstimatedPrice))) {
         return false;
       }
-      const budgetFloor = match.budgetAmount ?? match.awardAmount ?? 0;
+      // 요구사항(2026-09-24 사용자 요청: "규모는 예산이 아니라 낙찰가로
+      // 변경하자. 검색하는 모든건 낙찰건만 대상이니까 그게 정확할것
+      // 같아"): daily-scan.ts의 "최소 공사 규모" 판정과 동일하게, 낙찰금액이
+      // 있으면 예산보다 우선한다.
+      const budgetFloor = match.awardAmount ?? match.budgetAmount ?? 0;
       if (budgetFloor < (Number(minBudgetAmount) || 0)) return false;
       return true;
     };
@@ -519,8 +523,10 @@ export default function Settings() {
           <div className="space-y-2">
             <Label htmlFor="minBudget">최소 공사 규모 (원)</Label>
             <p className="text-xs text-muted-foreground">
-              이 금액 미만인 공고는 제외합니다. 추정가격이 없는 공고를 걸러내는 안전장치로도 쓰입니다. 비워두면(제한
-              없음) 이 조건으로는 거르지 않습니다. 참고용 기본값: 50,000,000원.
+              이 금액 미만인 공고는 제외합니다. 낙찰금액이 있으면 낙찰금액으로, 없으면(LH 등) 예산으로 판단합니다
+              {/* 요구사항(2026-09-24: "규모는 예산이 아니라 낙찰가로 변경하자. 검색하는 모든건 낙찰건만
+              대상이니까 그게 정확할것 같아") — 낙찰금액을 우선 기준으로 삼도록 설명 문구를 갱신 */}
+              . 비워두면(제한 없음) 이 조건으로는 거르지 않습니다. 참고용 기본값: 50,000,000원.
             </p>
             <Input
               id="minBudget"
