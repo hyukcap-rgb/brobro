@@ -258,8 +258,24 @@ function WorkCategoryPicker({
 // 수동 검색 모두의 대상 사이트. "나라장터"는 항상 켜져 있고 끌 수 없다(체크박스
 // 비활성화). "LH"는 선택. "D2B"(군대)는 아직 API 연동이 없어 비활성화 표시만
 // 한다 — WorkCategoryPicker의 UNSUPPORTED_CATEGORIES와 같은 패턴.
+//
+// 요구사항(2026-09-24 사용자 요청: "국가철도공단 관련 및 병행해서 도로공사,
+// 전력공사도 붙이자" → "이정도를 우선 붙이고 나머지 공사api를 찾아보자"):
+// 한국도로공사(data.ex.co.kr)·한국전력공사(bigdata.kepco.co.kr) API 스펙은
+// 확인했지만(요청/응답 필드까지 확인), 둘 다 나라장터/LH와 달리 각 기관의
+// 자체 포털에서 별도 회원가입 후 발급받는 인증키가 필요하다 — 아직 키가 없어
+// daily-scan.ts에 실제 수집 로직을 연결하지 못했다. D2B와 동일하게 화면에는
+// 항목만 미리 보여주고 비활성화해 둔다(키 발급되면 SELECTABLE_SOURCES로 옮기고
+// daily-scan.ts에 연동).
 const SELECTABLE_SOURCES = ["LH"] as const;
-const UNSUPPORTED_SOURCES = ["D2B(군대)"] as const;
+const UNSUPPORTED_SOURCES = ["D2B(군대)", "한국도로공사", "한국전력공사"] as const;
+const UNSUPPORTED_SOURCE_HINTS: Record<(typeof UNSUPPORTED_SOURCES)[number], string> = {
+  "D2B(군대)": "아직 API 연동 전이라 지원하지 않습니다.",
+  한국도로공사:
+    "API 스펙은 확인했지만(계약업체명은 주는데 첨부파일 링크가 없음) data.ex.co.kr 자체 인증키 발급이 필요해 아직 연동 전입니다.",
+  한국전력공사:
+    "API 스펙은 확인했지만(첨부파일 링크는 있는데 낙찰자명이 없음) bigdata.kepco.co.kr 자체 인증키 발급이 필요해 아직 연동 전입니다.",
+};
 
 function SiteSourcePicker({
   values,
@@ -304,7 +320,7 @@ function SiteSourcePicker({
                 {source}
               </label>
             </TooltipTrigger>
-            <TooltipContent>아직 API 연동 전이라 지원하지 않습니다.</TooltipContent>
+            <TooltipContent>{UNSUPPORTED_SOURCE_HINTS[source]}</TooltipContent>
           </Tooltip>
         ))}
       </div>
