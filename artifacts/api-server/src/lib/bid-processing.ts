@@ -1136,13 +1136,29 @@ export function extractBusinessContactFromText(
 // 둘 다 실패하면 undefined를 반환해 daily-scan.ts의 다음 대체 수단
 // (extractGeneralAddress → cnstrtsiteRgnNm)으로 넘어가게 한다 — 엉뚱한
 // 문장을 주소로 보여주는 것보다는 더 신뢰도 높은 대체값을 쓰는 게 낫다.
+//
+// 요구사항(2026-09-26 사용자 리포트, 화면 캡처로 확인: 위 수정 이후에도
+// "이외의 외부로 유출되는 일이 없..."/"의 상태가 설계서와 다를 때"처럼
+// 여전히 문장이 주소로 표시됨): 원인은 콜론이 실제로 존재하는 경우였다 —
+// "작업장소 : 이외의 외부로 자료가 유출되는 일이 없도록 한다"처럼 보안
+// 각서/시방서의 조항 제목이 우연히 라벨 단어와 같고, 콜론 뒤에 조항 본문이
+// 이어지는 문서였다(2번째 안전장치가 뚫린 원인: "외부로"의 "로", "상태가"의
+// "가"가 주소 접미사와 우연히 같아 1개짜리 오탐 방지 검사를 통과함 — "로"/
+// "가"는 조사로도 흔히 쓰여 한 번만 등장해서는 신뢰할 수 없다). 진짜 주소는
+// "인천광역시 강화군 강화읍"처럼 시/군/구/읍/면/동/리/로/길 덩어리가 보통
+// 2개 이상 연달아 나온다 — 그래서 최소 1개가 아니라 2개 이상 나와야
+// 주소로 인정하도록 강화했다(재현 테스트: 문장형 오탐은 전부 1개 이하,
+// 실제 주소들은 전부 2개 이상으로 확인).
 const SITE_ADDRESS_PATTERN =
   /(?:공사\s*현장|현장\s*(?:위치|주소)|공사\s*(?:위치|장소)|시공\s*(?:위치|장소)|설치\s*(?:위치|장소)|작업\s*(?:위치|장소)|사업\s*(?:위치|장소)|이행\s*장소|납품\s*장소|시행\s*(?:위치|장소))\s*[:：|]\s*([^\n\r|]{4,80})/;
-const SITE_ADDRESS_LIKE_PATTERN = /[가-힣0-9]{1,10}(?:시|군|구|읍|면|동|리|가|로|길)(?![가-힣0-9])/;
+const SITE_ADDRESS_LIKE_PATTERN = /[가-힣0-9]{1,10}(?:시|군|구|읍|면|동|리|가|로|길)(?![가-힣0-9])/g;
+const SITE_ADDRESS_MIN_TOKENS = 2;
 
 export function extractSiteAddress(text: string): string | undefined {
   const captured = text.match(SITE_ADDRESS_PATTERN)?.[1]?.trim();
-  return captured && SITE_ADDRESS_LIKE_PATTERN.test(captured) ? captured : undefined;
+  if (!captured) return undefined;
+  const tokenCount = [...captured.matchAll(SITE_ADDRESS_LIKE_PATTERN)].length;
+  return tokenCount >= SITE_ADDRESS_MIN_TOKENS ? captured : undefined;
 }
 
 // 요구사항(2026-09-13 사용자 지적: "이미 계속 주소 미확인으로 나오고 있어.
