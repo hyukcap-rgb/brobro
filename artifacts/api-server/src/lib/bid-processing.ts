@@ -1820,6 +1820,57 @@ async function unzipText(
   return decodeText(await entry.buffer());
 }
 
+// 요구사항(2026-09-26 사용자 리포트: "부직포" 키워드가 이 공사에 실제로는
+// 쓰이지 않는데도 매칭됨 — "여기 키워드 말고 2200이 검색되었다고 하는데.
+// 파일에는 내용이 없다고. 어디에 있는거야?"): 실제로는 2200이라는 값이
+// 파일 안에 있었지만("재료비" 시트 D29 셀), 그건 이 공사의 실제 물량이
+// 아니라 "700g/㎡ 사면보호용 부직포의 단가가 ㎡당 2,200원"이라는 뜻의
+// 참고용 자재 단가 정보였다(시멘트 40kg/포=6,500원, ㎏ 단위=162.5원처럼
+// 단가 환산이 맞아떨어지는 것으로 확인). 설계내역서 엑셀에는 이런 식으로
+// "재료비/단가표" 성격의 참고용 시트가 항상 딸려 나오는 경우가 많은데,
+// 이 시트들은 이 공사에서 실제로 쓰는 자재와 무관하게 표준 단가 데이터베이스
+// 전체를 나열해두기 때문에, 여기서 키워드가 매칭되면 "실제로는 안 쓰는
+// 자재인데 리드로 뜨는" 오탐이 생긴다. 사용자 확인(AskUserQuestion, 2026-09-26
+// "재료비/단가표 시트는 매칭에서 제외") 후, 시트 이름으로 이런 참고용 단가
+// 시트를 걸러낸다. 내부 파일명(xl/worksheets/sheetN.xml)은 실제 시트 이름을
+// 담지 않으므로, xl/workbook.xml + xl/_rels/workbook.xml.rels를 함께 읽어
+// 실제 시트 이름을 구한다(덤으로 위치 표시도 "sheet16!D29" 대신
+// "재료비!D29"처럼 사람이 읽을 수 있게 개선된다).
+const EXCLUDED_REFERENCE_SHEET_PATTERN = /단가|재료비|유가정보|운반거리조견표/;
+
+async function resolveSheetNames(archive: unzipper.CentralDirectory): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  try {
+    const relsXml = await unzipText(archive, "xl/_rels/workbook.xml.rels");
+    const ridToTarget = new Map<string, string>();
+    for (const rel of relsXml.matchAll(/<Relationship\b([^>]*)\/>/g)) {
+      const attrs = rel[1];
+      const id = /\bId="([^"]+)"/.exec(attrs)?.[1];
+      const target = /\bTarget="([^"]+)"/.exec(attrs)?.[1];
+      if (id && target) ridToTarget.set(id, target);
+    }
+    const workbookXml = await unzipText(archive, "xl/workbook.xml");
+    for (const sheetTag of workbookXml.matchAll(/<sheet\b([^>]*)\/>/g)) {
+      const attrs = sheetTag[1];
+      const name = /\bname="([^"]*)"/.exec(attrs)?.[1];
+      const rid = /\br:id="([^"]+)"/.exec(attrs)?.[1];
+      if (!name || !rid) continue;
+      const target = ridToTarget.get(rid);
+      if (!target) continue;
+      // target은 보통 "worksheets/sheet16.xml"(가끔 앞에 "/xl/"가 붙음)
+      // 형태다 — 내부 파일명("sheet16")만 뽑아 매핑 키로 쓴다.
+      const internalName = path.basename(target, ".xml");
+      map.set(internalName, decodeXml(name));
+    }
+  } catch {
+    // workbook.xml 파싱에 실패해도 전체 추출이 막히면 안 되므로 빈 맵으로
+    // 넘어간다 — 이 경우 시트 이름 대신 내부 파일명("sheet1")이 쓰이고,
+    // 참고용 단가 시트 제외 필터도 적용되지 않는다(기존 동작과 동일, 안전한
+    // 폴백).
+  }
+  return map;
+}
+
 async function extractXlsx(filePath: string): Promise<ExtractedSegment[]> {
   const archive = await openZip(filePath);
   const entries = archive.files.map((entry) => entry.path);
@@ -1827,11 +1878,14 @@ async function extractXlsx(filePath: string): Promise<ExtractedSegment[]> {
   const sharedStrings = [...sharedXml.matchAll(/<si[^>]*>([\s\S]*?)<\/si>/g)].map((match) =>
     stripXml(match[1]),
   );
+  const sheetNameMap = await resolveSheetNames(archive);
   const sheets = entries.filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(entry));
   const segments: ExtractedSegment[] = [];
   for (const sheetEntry of sheets) {
+    const internalSheetName = path.basename(sheetEntry, ".xml");
+    const sheetName = sheetNameMap.get(internalSheetName) ?? internalSheetName;
+    if (EXCLUDED_REFERENCE_SHEET_PATTERN.test(sheetName)) continue;
     const xml = await unzipText(archive, sheetEntry);
-    const sheetName = path.basename(sheetEntry, ".xml");
     for (const row of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
       const cells: { address: string; text: string }[] = [];
       for (const cell of row[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
