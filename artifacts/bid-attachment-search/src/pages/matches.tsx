@@ -94,6 +94,18 @@ function formatAmount(value: number | null | undefined): string {
   return `${value.toLocaleString("ko-KR")}원`;
 }
 
+// 요구사항(2026-09-28 사용자 요청: "수량으로 정렬을 기본으로 해줘"): quantityText는
+// "2200 ㎡", "1,000㎡", "63 ton"처럼 숫자+단위가 섞인 자유 텍스트라 그대로는
+// 정렬할 수 없다. 맨 앞의 숫자(쉼표·소수점 포함)만 뽑아 비교 가능한 값으로
+// 바꾼다. 수량이 없는 매칭은 정렬 시 항상 맨 뒤로 가도록 -Infinity를 준다.
+function parseQuantityForSort(quantityText: string | null | undefined): number {
+  if (!quantityText) return -Infinity;
+  const match = quantityText.replace(/,/g, "").match(/[\d.]+/);
+  if (!match) return -Infinity;
+  const value = Number(match[0]);
+  return Number.isFinite(value) ? value : -Infinity;
+}
+
 function telHref(phone: string): string {
   return `tel:${phone.replace(/[^0-9+]/g, "")}`;
 }
@@ -285,8 +297,13 @@ export default function Matches() {
   // 접고 펼 수 있게 하고, 그 날짜 묶음 단위로 페이지를 나눈다. 정렬 기준으로
   // 낙찰일을 고르면 날짜 묶음 자체의 순서(최신순/오래된순)가 바뀌고, 규모·
   // 낙찰자를 고르면 각 날짜 묶음 "안"의 행 순서가 바뀐다.
-  type SortColumn = "awardDate" | "budgetAmount" | "bidderName";
-  const [sortColumn, setSortColumn] = useState<SortColumn>("awardDate");
+  type SortColumn = "awardDate" | "budgetAmount" | "bidderName" | "quantity";
+  // 요구사항(2026-09-28 사용자 요청: "수량으로 정렬을 기본으로 해줘"): 기본 정렬
+  // 기준을 낙찰일에서 수량(큰 순)으로 바꾼다. 날짜 묶음 자체의 순서는 그대로
+  // 최신순을 유지하고(아래 dateGroups의 "sortColumn !== awardDate"), 각 날짜
+  // 묶음 "안"에서의 행 순서만 수량 기준으로 바뀐다 — 규모·낙찰자 정렬과 동일한
+  // 방식.
+  const [sortColumn, setSortColumn] = useState<SortColumn>("quantity");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const toggleSort = (column: SortColumn) => {
     if (sortColumn === column) {
@@ -369,6 +386,8 @@ export default function Matches() {
           if (sortColumn === "budgetAmount") {
             // 요구사항(2026-09-24: "규모는 예산이 아니라 낙찰가로 변경하자")
             cmp = (x.awardAmount ?? x.budgetAmount ?? 0) - (y.awardAmount ?? y.budgetAmount ?? 0);
+          } else if (sortColumn === "quantity") {
+            cmp = parseQuantityForSort(x.quantityText) - parseQuantityForSort(y.quantityText);
           } else {
             cmp = (x.bidderName ?? "").localeCompare(y.bidderName ?? "", "ko");
           }
@@ -626,7 +645,15 @@ export default function Matches() {
                       보여줘. 낙찰일 다음에 낙찰제목을 넣어줘"): 공고명(=공사제목/
                       낙찰제목)을 낙찰일 바로 다음 컬럼에 보여준다. */}
                       <TableHead className="px-2 w-[320px]">공사제목</TableHead>
-                      <TableHead className="px-2 w-[130px]">키워드 · 수량</TableHead>
+                      <TableHead className="px-2 w-[130px]">
+                        <button
+                          type="button"
+                          onClick={() => toggleSort("quantity")}
+                          className="inline-flex items-center gap-1 hover:text-foreground"
+                        >
+                          키워드 · 수량 {sortIndicator("quantity")}
+                        </button>
+                      </TableHead>
                       <TableHead className="px-2 w-[160px]">
                         <button
                           type="button"
