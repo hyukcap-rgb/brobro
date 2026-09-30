@@ -382,12 +382,23 @@ export default function Matches() {
       const items = [...(groups.get(dateKey) ?? [])];
       if (sortColumn !== "awardDate") {
         items.sort((x, y) => {
+          // 요구사항(2026-09-30 사용자 요청: "수량이 높은순으로 정렬해서
+          // 보내주고 사용자 지정은 마지막으로 해서 이메일과 리스트정렬을
+          // 해줘"): "사용자지정"(2차 키워드) 매칭은 실제 매칭 키워드가
+          // 아니라 통일된 라벨이고 수량 정보도 없어(daily-scan.ts 참고)
+          // 신뢰도가 낮은 리드다 — 정렬 방향(오름/내림차순)과 무관하게
+          // 항상 맨 뒤로 보낸다.
+          if (sortColumn === "quantity") {
+            const xSecondary = x.matchedKeyword === "사용자지정" ? 1 : 0;
+            const ySecondary = y.matchedKeyword === "사용자지정" ? 1 : 0;
+            if (xSecondary !== ySecondary) return xSecondary - ySecondary;
+            const qcmp = parseQuantityForSort(x.quantityText) - parseQuantityForSort(y.quantityText);
+            return sortDir === "asc" ? qcmp : -qcmp;
+          }
           let cmp = 0;
           if (sortColumn === "budgetAmount") {
             // 요구사항(2026-09-24: "규모는 예산이 아니라 낙찰가로 변경하자")
             cmp = (x.awardAmount ?? x.budgetAmount ?? 0) - (y.awardAmount ?? y.budgetAmount ?? 0);
-          } else if (sortColumn === "quantity") {
-            cmp = parseQuantityForSort(x.quantityText) - parseQuantityForSort(y.quantityText);
           } else {
             cmp = (x.bidderName ?? "").localeCompare(y.bidderName ?? "", "ko");
           }

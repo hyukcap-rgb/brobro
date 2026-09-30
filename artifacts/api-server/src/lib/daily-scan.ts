@@ -33,6 +33,22 @@ import { groupMatchesByNotice, listAwardedMatchesForRun } from "./matches-store"
 import { sendScanResultEmail, type ScanResultEmailAttachment } from "./mailer";
 import { logger } from "./logger";
 
+// 요구사항(2026-09-28 사용자 요청: "이메일로 보내는것도 수량기준으로 정렬해서
+// 보내줘"): matches.tsx 화면의 기본 정렬을 수량 내림차순으로 바꾼 것과 같은
+// 규칙을 메일 발송(sendScheduleResultEmailIfNeeded)에도 적용하기 위한 헬퍼.
+// quantityText는 "2200 ㎡", "1,000㎡"처럼 숫자+단위가 섞인 자유 텍스트라
+// 그대로는 비교할 수 없어 맨 앞 숫자(쉼표 제거)만 뽑아 비교한다 — 프런트
+// (matches.tsx의 parseQuantityForSort)와 동일한 규칙이지만, 패키지가 달라
+// 공유 유틸 없이 각자 구현했다(2026-09-24 groupMatchesByNotice 관련 주석
+// 참고 — 같은 이유). 수량이 없는 매칭은 항상 맨 뒤로 보낸다.
+function parseQuantityForSort(quantityText: string | null | undefined): number {
+  if (!quantityText) return -Infinity;
+  const match = quantityText.replace(/,/g, "").match(/[\d.]+/);
+  if (!match) return -Infinity;
+  const value = Number(match[0]);
+  return Number.isFinite(value) ? value : -Infinity;
+}
+
 // 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): "우선순위 첨부파일을
 // 앞으로 정렬"하는 동일한 비교 함수가 1차 키워드 파이프라인과 "사용자지정"
 // (2차 키워드) 파이프라인 두 곳에 똑같이 복사돼 있었다. 정렬 기준(내림차순,
@@ -1574,10 +1590,26 @@ async function sendScheduleResultEmailIfNeeded(run: DailyScanRun): Promise<void>
     // 키워드 뒤에 "외N건"만 붙이고 한 줄로 보여준다.
     const noticeGroups = groupMatchesByNotice(matches);
 
+    // 요구사항(2026-09-28 사용자 요청: "이메일로 보내는것도 수량기준으로
+    // 정렬해서 보내줘" / 2026-09-30 재지적: "오늘 아침에도 이메일에 단위가
+    // 높은 순으로 오지 않고 뒤섞여서 왔어 ... 사용자 지정은 마지막으로 해서
+    // 이메일과 리스트정렬을 해줘"): 화면(matches.tsx)의 기본 정렬을 수량
+    // 내림차순으로 바꾼 것과 같은 기준을 메일 본문에도 적용한다. 정렬 전에는
+    // 낙찰 최신순(listAwardedMatchesForRun의 desc createdAt)이었다.
+    // "사용자지정"(2차 키워드) 매칭은 실제 매칭 키워드가 아니라 통일된
+    // 라벨이고 수량 정보도 없어(위 baseValues 참고) 신뢰도가 낮은 리드다 —
+    // 수량과 무관하게 항상 맨 뒤로 보낸다(matches.tsx와 동일한 규칙).
+    const sortedNoticeGroups = [...noticeGroups].sort((a, b) => {
+      const aSecondary = a.representative.matchedKeyword === "사용자지정" ? 1 : 0;
+      const bSecondary = b.representative.matchedKeyword === "사용자지정" ? 1 : 0;
+      if (aSecondary !== bSecondary) return aSecondary - bSecondary;
+      return parseQuantityForSort(b.representative.quantityText) - parseQuantityForSort(a.representative.quantityText);
+    });
+
     await sendScanResultEmail({
       to: settings.notificationEmails,
       dateLabel: formatDateLabel(run.targetDates),
-      matches: noticeGroups.map(({ representative: match, count }) => ({
+      matches: sortedNoticeGroups.map(({ representative: match, count }) => ({
         siteName: match.siteName,
         noticeName: match.noticeName,
         demandAgency: match.demandAgency,
