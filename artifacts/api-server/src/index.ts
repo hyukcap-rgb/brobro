@@ -128,3 +128,16 @@ app.listen(port, (err) => {
 
   logger.info({ port }, "Server listening");
 });
+
+// 장애 대응(2026-10-13): 메인 스레드가 오래 막히면(동기 연산 등) 웹 요청이 전부
+// 멈추는데, 막혀 있는 동안에는 로그도 안 찍혀서 원인을 찾기 어려웠다. 5초마다
+// 타이머가 제때 돌았는지 확인해, 10초 이상 늦었으면 풀린 직후 얼마나 막혀
+// 있었는지 경고를 남긴다(직전 로그와 함께 보면 무엇이 막았는지 좁힐 수 있다).
+const EVENT_LOOP_CHECK_MS = 5_000;
+let lastEventLoopTick = Date.now();
+setInterval(() => {
+  const now = Date.now();
+  const lagMs = now - lastEventLoopTick - EVENT_LOOP_CHECK_MS;
+  if (lagMs > 10_000) logger.warn({ lagMs }, "이벤트 루프(메인 스레드)가 오래 멈춰 있었음");
+  lastEventLoopTick = now;
+}, EVENT_LOOP_CHECK_MS).unref();

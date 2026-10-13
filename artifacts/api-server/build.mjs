@@ -15,7 +15,13 @@ async function buildAll() {
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
-    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
+    // extract-worker: 첨부파일 텍스트 추출을 메인 스레드 밖(워커 스레드)에서
+    // 돌리기 위한 별도 엔트리. dist/extract-worker.mjs로 index.mjs 옆에 나온다
+    // (src/lib/extract-runner.ts가 이 경로를 찾는다).
+    entryPoints: {
+      index: path.resolve(artifactDir, "src/index.ts"),
+      "extract-worker": path.resolve(artifactDir, "src/lib/extract-worker.ts"),
+    },
     platform: "node",
     bundle: true,
     format: "esm",

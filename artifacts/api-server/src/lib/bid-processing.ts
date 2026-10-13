@@ -1,11 +1,9 @@
-import { execFile } from "node:child_process";
 import { constants as fsConstants, createReadStream, createWriteStream } from "node:fs";
 import {
   access,
   cp,
   mkdir,
   mkdtemp,
-  open,
   readFile,
   readdir,
   rename,
@@ -17,7 +15,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { request as httpsRequest } from "node:https";
-import { promisify } from "node:util";
 import { pipeline } from "node:stream/promises";
 import type { Response } from "express";
 import { HttpsProxyAgent } from "https-proxy-agent";
@@ -26,8 +23,17 @@ import { eq } from "drizzle-orm";
 import { db, businessContactCacheTable, govCorpCacheTable } from "@workspace/db";
 import { logger } from "./logger";
 import { kstToday } from "./kr-holidays";
+import {
+  command,
+  decodeXml,
+  stripXml,
+  type ExtractedSegment,
+} from "./extract-core";
+import { ExtractTimeoutError, extractSegments } from "./extract-runner";
 
-const execFileAsync = promisify(execFile);
+export { command, extractSegments };
+export type { ExtractedSegment };
+
 const API_BASE =
   "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoCnstwk";
 // Prefer a mounted persistent volume when available (e.g. Railway's
@@ -754,18 +760,6 @@ export interface CollectionJob {
   error: string | null;
 }
 
-export interface ExtractedSegment {
-  text: string;
-  itemContext?: string;
-  sheet: string | null;
-  page: number | null;
-  location: string;
-  // 요구사항(2026-09-18 사용자 요청: "관급자재 에 키워드가 있는경우 검색하지
-  // 않아도 됨 ... 이건 우리가 영업을 하지 못해"): 이 항목이 "관급자재"(발주기관이
-  // 직접 공급 — 영업 대상 아님) 또는 "사급자재"(시공사가 직접 구매 — 영업 대상)
-  // 구분 아래에 있는지. tagMaterialSections()가 문서 순서를 따라가며 채운다.
-  section?: "관급자재" | "사급자재" | null;
-}
 
 interface AttemptResult<T> {
   value: T;
@@ -776,31 +770,6 @@ interface AttemptResult<T> {
 const jobs = new Map<string, CollectionJob>();
 let persistChain = Promise.resolve();
 
-function decodeXml(value: string): string {
-  return value
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code: string) =>
-      String.fromCodePoint(Number.parseInt(code, 16)),
-    )
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&");
-}
-
-function stripXml(xml: string): string {
-  return decodeXml(
-    xml
-      .replace(/<w:tab[^>]*\/>/g, "\t")
-      .replace(/<w:br[^>]*\/>/g, "\n")
-      .replace(/<\/(?:w:p|hp:p|p)>/g, "\n")
-      .replace(/<[^>]+>/g, " "),
-  )
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 export function sanitizeName(value: string, fallback = "attachment"): string {
   let decoded = value;
@@ -870,6 +839,8 @@ export async function withRetry<T>(
       lastError = error;
       previousErrors.push(describeError(error));
       if (error instanceof CircuitOpenError) throw error;
+      // 같은 파일은 다시 시도해도 똑같이 시간 초과되므로 재시도하지 않는다.
+      if (error instanceof ExtractTimeoutError) throw error;
       if (attempts < maxAttempts) {
         const backoffMs = Math.min(15_000, 750 * 2 ** (attempts - 1));
         await new Promise((resolve) => setTimeout(resolve, backoffMs));
@@ -1714,14 +1685,6 @@ export async function downloadAttachment(
   return filePath;
 }
 
-export async function command(command: string, args: string[], cwd?: string): Promise<string> {
-  const result = await execFileAsync(command, args, {
-    cwd,
-    maxBuffer: 32 * 1024 * 1024,
-    encoding: "utf8",
-  });
-  return result.stdout;
-}
 
 async function extractZip(zipPath: string): Promise<string | null> {
   const archive = await unzipper.Open.file(zipPath);
@@ -1783,362 +1746,6 @@ async function walk(directory: string): Promise<string[]> {
   return output;
 }
 
-// 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): decodeText는 첨부파일
-// 텍스트를 읽을 때마다 호출되는데, 매번 TextDecoder를 새로 만들 필요가 없다.
-// 여기서는 { stream: true } 없이 매 호출을 완결된 단일 decode()로 쓰므로
-// 인스턴스에 스트리밍 상태가 남지 않아 재사용해도 결과는 이전과 동일하다.
-const UTF8_TEXT_DECODER = new TextDecoder("utf-8", { fatal: false });
-const EUCKR_TEXT_DECODER = new TextDecoder("euc-kr", { fatal: false });
-
-function decodeText(bytes: Buffer): string {
-  const utf8 = UTF8_TEXT_DECODER.decode(bytes);
-  const replacementRatio = (utf8.match(/\uFFFD/g)?.length ?? 0) / Math.max(utf8.length, 1);
-  if (replacementRatio < 0.01) return utf8;
-  try {
-    return EUCKR_TEXT_DECODER.decode(bytes);
-  } catch {
-    return utf8;
-  }
-}
-
-async function openZip(filePath: string): Promise<unzipper.CentralDirectory> {
-  try {
-    return await unzipper.Open.file(filePath);
-  } catch (error) {
-    throw new Error(
-      `ZIP 컨테이너를 읽지 못했습니다: ${error instanceof Error ? error.message : "알 수 없는 오류"}`,
-    );
-  }
-}
-
-async function unzipText(
-  archive: unzipper.CentralDirectory,
-  entryPath: string,
-): Promise<string> {
-  const entry = archive.files.find((candidate) => candidate.path === entryPath);
-  if (!entry || entry.type === "Directory") return "";
-  return decodeText(await entry.buffer());
-}
-
-// 요구사항(2026-09-26 사용자 리포트: "부직포" 키워드가 이 공사에 실제로는
-// 쓰이지 않는데도 매칭됨 — "여기 키워드 말고 2200이 검색되었다고 하는데.
-// 파일에는 내용이 없다고. 어디에 있는거야?"): 실제로는 2200이라는 값이
-// 파일 안에 있었지만("재료비" 시트 D29 셀), 그건 이 공사의 실제 물량이
-// 아니라 "700g/㎡ 사면보호용 부직포의 단가가 ㎡당 2,200원"이라는 뜻의
-// 참고용 자재 단가 정보였다(시멘트 40kg/포=6,500원, ㎏ 단위=162.5원처럼
-// 단가 환산이 맞아떨어지는 것으로 확인). 설계내역서 엑셀에는 이런 식으로
-// "재료비/단가표" 성격의 참고용 시트가 항상 딸려 나오는 경우가 많은데,
-// 이 시트들은 이 공사에서 실제로 쓰는 자재와 무관하게 표준 단가 데이터베이스
-// 전체를 나열해두기 때문에, 여기서 키워드가 매칭되면 "실제로는 안 쓰는
-// 자재인데 리드로 뜨는" 오탐이 생긴다. 사용자 확인(AskUserQuestion, 2026-09-26
-// "재료비/단가표 시트는 매칭에서 제외") 후, 시트 이름으로 이런 참고용 단가
-// 시트를 걸러낸다. 내부 파일명(xl/worksheets/sheetN.xml)은 실제 시트 이름을
-// 담지 않으므로, xl/workbook.xml + xl/_rels/workbook.xml.rels를 함께 읽어
-// 실제 시트 이름을 구한다(덤으로 위치 표시도 "sheet16!D29" 대신
-// "재료비!D29"처럼 사람이 읽을 수 있게 개선된다).
-const EXCLUDED_REFERENCE_SHEET_PATTERN = /단가|재료비|유가정보|운반거리조견표/;
-
-async function resolveSheetNames(archive: unzipper.CentralDirectory): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
-  try {
-    const relsXml = await unzipText(archive, "xl/_rels/workbook.xml.rels");
-    const ridToTarget = new Map<string, string>();
-    for (const rel of relsXml.matchAll(/<Relationship\b([^>]*)\/>/g)) {
-      const attrs = rel[1];
-      const id = /\bId="([^"]+)"/.exec(attrs)?.[1];
-      const target = /\bTarget="([^"]+)"/.exec(attrs)?.[1];
-      if (id && target) ridToTarget.set(id, target);
-    }
-    const workbookXml = await unzipText(archive, "xl/workbook.xml");
-    for (const sheetTag of workbookXml.matchAll(/<sheet\b([^>]*)\/>/g)) {
-      const attrs = sheetTag[1];
-      const name = /\bname="([^"]*)"/.exec(attrs)?.[1];
-      const rid = /\br:id="([^"]+)"/.exec(attrs)?.[1];
-      if (!name || !rid) continue;
-      const target = ridToTarget.get(rid);
-      if (!target) continue;
-      // target은 보통 "worksheets/sheet16.xml"(가끔 앞에 "/xl/"가 붙음)
-      // 형태다 — 내부 파일명("sheet16")만 뽑아 매핑 키로 쓴다.
-      const internalName = path.basename(target, ".xml");
-      map.set(internalName, decodeXml(name));
-    }
-  } catch {
-    // workbook.xml 파싱에 실패해도 전체 추출이 막히면 안 되므로 빈 맵으로
-    // 넘어간다 — 이 경우 시트 이름 대신 내부 파일명("sheet1")이 쓰이고,
-    // 참고용 단가 시트 제외 필터도 적용되지 않는다(기존 동작과 동일, 안전한
-    // 폴백).
-  }
-  return map;
-}
-
-async function extractXlsx(filePath: string): Promise<ExtractedSegment[]> {
-  const archive = await openZip(filePath);
-  const entries = archive.files.map((entry) => entry.path);
-  const sharedXml = await unzipText(archive, "xl/sharedStrings.xml");
-  const sharedStrings = [...sharedXml.matchAll(/<si[^>]*>([\s\S]*?)<\/si>/g)].map((match) =>
-    stripXml(match[1]),
-  );
-  const sheetNameMap = await resolveSheetNames(archive);
-  const sheets = entries.filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(entry));
-  const segments: ExtractedSegment[] = [];
-  for (const sheetEntry of sheets) {
-    const internalSheetName = path.basename(sheetEntry, ".xml");
-    const sheetName = sheetNameMap.get(internalSheetName) ?? internalSheetName;
-    if (EXCLUDED_REFERENCE_SHEET_PATTERN.test(sheetName)) continue;
-    const xml = await unzipText(archive, sheetEntry);
-    for (const row of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
-      const cells: { address: string; text: string }[] = [];
-      for (const cell of row[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
-        const address = /\br="([^"]+)"/.exec(cell[1])?.[1] ?? "셀";
-        const type = /\bt="([^"]+)"/.exec(cell[1])?.[1] ?? "";
-        const body = cell[2];
-        let text = "";
-        if (type === "s") {
-          const index = Number(/<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? -1);
-          text = sharedStrings[index] ?? "";
-        } else if (type === "inlineStr") {
-          text = stripXml(body);
-        } else {
-          text = decodeXml(/<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? "").trim();
-        }
-        if (text) cells.push({ address, text });
-      }
-      const itemContext = cells.map((cell) => `${cell.address}=${cell.text}`).join(" | ");
-      for (const cell of cells) {
-        segments.push({
-          text: cell.text,
-          itemContext,
-          sheet: sheetName,
-          page: null,
-          location: `${sheetName}!${cell.address}`,
-        });
-      }
-    }
-  }
-  return segments;
-}
-
-async function extractOfficeXml(
-  filePath: string,
-  matcher: RegExp,
-  label: string,
-): Promise<ExtractedSegment[]> {
-  const archive = await openZip(filePath);
-  const entries = archive.files.map((entry) => entry.path).filter((entry) => matcher.test(entry));
-  const segments: ExtractedSegment[] = [];
-  for (const entry of entries) {
-    const xml = await unzipText(archive, entry);
-    const paragraphs = xml
-      .split(/<\/(?:w:p|hp:p|p)>/i)
-      .map(stripXml)
-      .filter(Boolean);
-    paragraphs.forEach((text, index) => {
-      segments.push({
-        text,
-        sheet: null,
-        page: null,
-        location: `${label} ${path.basename(entry)} 문단 ${index + 1}`,
-      });
-    });
-  }
-  return segments;
-}
-
-async function extractPdf(filePath: string): Promise<ExtractedSegment[]> {
-  const handle = await open(filePath, "r");
-  const header = Buffer.alloc(8);
-  try {
-    await handle.read(header, 0, header.length, 0);
-  } finally {
-    await handle.close();
-  }
-  if (!header.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
-    const printableHeader = header.toString("ascii").replace(/[^\x20-\x7e]/g, ".");
-    throw new Error(
-      `PDF 확장자이나 실제 파일 헤더가 PDF(%PDF-)가 아닙니다 (헤더: ${printableHeader}).`,
-    );
-  }
-  const target = `${filePath}.txt`;
-  await command("pdftotext", ["-layout", filePath, target]);
-  // 최적화(2026-09-22, 순수 리팩터링 — 동작 변화 없음): readFile이 실패하면
-  // 아래 rm이 실행되지 않아 임시 .txt 파일이 남는 누수가 있었다. try/finally로
-  // 감싸 성공/실패 어느 경우에도 항상 정리되게 했다 — 성공 경로의 반환값은
-  // 이전과 동일하다.
-  let text: string;
-  try {
-    text = decodeText(await readFile(target));
-  } finally {
-    await rm(target, { force: true });
-  }
-  return text.split("\f").flatMap((pageText, pageIndex) =>
-    pageText
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line, lineIndex) => ({
-        text: line,
-        sheet: null,
-        page: pageIndex + 1,
-        location: `${pageIndex + 1}페이지 ${lineIndex + 1}행`,
-      })),
-  );
-}
-
-async function extractLegacy(filePath: string, extension: string): Promise<ExtractedSegment[]> {
-  if (extension === ".xls") {
-    // Resolved relative to this module's own location (not process.cwd(), which
-    // is the container WORKDIR and does not match where this file lives once
-    // bundled) so the script is found regardless of the process start directory.
-    const scriptPath = path.resolve(import.meta.dirname, "..", "scripts", "extract-xls.py");
-    try {
-      return JSON.parse(await command("python3", [scriptPath, filePath])) as ExtractedSegment[];
-    } catch (error) {
-      throw new Error(`XLS 셀 파싱 실패: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  const outputs: string[] = [];
-  if (extension === ".doc") {
-    try {
-      outputs.push(await command("antiword", [filePath]));
-    } catch {
-      // Fall through to strings extraction.
-    }
-  }
-  for (const args of [["-a", filePath], ["-a", "-el", filePath]]) {
-    try {
-      outputs.push(await command("strings", args));
-    } catch {
-      // A partial extraction is still useful.
-    }
-  }
-  return outputs
-    .join("\n")
-    .split(/\r?\n/)
-    .map((text) => text.trim())
-    .filter((text) => text.length > 1)
-    .map((text, index) => ({
-      text,
-      sheet: null,
-      page: null,
-      location: `추출 문자열 ${index + 1}`,
-    }));
-}
-
-type ContainerKind = "ole" | "zip" | "pdf" | "other";
-
-// 확장자가 아니라 파일 앞 8바이트로 실제 컨테이너 종류를 판별한다.
-// 실측(2026-09-13, 국가철도공단 공고 2026-03-000199 첨부): 확장자가 .hwpx인데
-// 내용은 HWP 5.0 OLE 바이너리인 파일이 존재한다. 확장자만 믿으면 이런 파일을
-// ZIP으로 열려다 BadZipFile로 실패해 본문이 통째로 검색에서 빠진다. 기관 사이트가
-// Content-Type을 application/x-msdownload로 내려주는 경우도 흔해 MIME도 믿을 수
-// 없다 — 신뢰할 수 있는 건 파일 내용뿐이다.
-async function sniffContainer(filePath: string): Promise<ContainerKind> {
-  const handle = await open(filePath, "r");
-  try {
-    const buffer = Buffer.alloc(8);
-    const { bytesRead } = await handle.read(buffer, 0, 8, 0);
-    if (bytesRead >= 4) {
-      if (buffer.readUInt32BE(0) === 0xd0cf11e0) return "ole";
-      if (buffer[0] === 0x50 && buffer[1] === 0x4b) return "zip";
-      if (buffer.subarray(0, 4).toString("latin1") === "%PDF") return "pdf";
-    }
-    return "other";
-  } finally {
-    await handle.close();
-  }
-}
-
-// HWP 5.0은 본문(BodyText)이 zlib(raw deflate)으로 압축된 OLE 스트림이라,
-// extractLegacy의 `strings` 방식으로는 스트림 이름과 목차 번호 정도만 나온다
-// (실측: 4,468자짜리 구매시방서에서 strings 출력은 88줄 전부 무의미한 문자열).
-// 부직포 같은 자재명은 대부분 시방서·내역서 본문과 표 안에 있으므로, HWP 첨부만
-// 있는 공고는 이 구조에서 매칭이 원천적으로 불가능했다. olefile로 BodyText를
-// 풀어 문단 단위로 추출한다.
-async function extractHwp5(filePath: string): Promise<ExtractedSegment[]> {
-  const scriptPath = path.resolve(import.meta.dirname, "..", "scripts", "extract-hwp.py");
-  try {
-    return JSON.parse(await command("python3", [scriptPath, filePath])) as ExtractedSegment[];
-  } catch (error) {
-    throw new Error(`HWP 본문 파싱 실패: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-// 요구사항(2026-09-18 사용자 요청: "관급자제 에 키워드가 있는경우 검색하지
-// 않아도 됨. 키워드가 관급자제 아래 검색하려는 키워드가 있는경우 삭제
-// 해줘.이건 우리가 영업을 하지 못해"): 내역서(엑셀 행, PDF/HWP/DOCX 표나 문단)는
-// 보통 "관급자재"/"사급자재" 같은 구분 행(또는 그 줄만 단독으로 있는 라벨)이
-// 나오고 그 아래로 여러 항목이 이어지는 구조다. extractXxx가 만드는 segments는
-// 항상 문서에 나온 순서 그대로이므로(엑셀은 시트 안에서 행 순서, PDF/HWP/DOCX는
-// 문단/줄 순서), 그 순서를 따라가며 "지금 어느 구분 아래인지"를 갱신하면 별도
-// 포맷별 파싱 없이도 전체 포맷에 동일하게 적용할 수 있다. 시트가 바뀌면(새
-// 내역서/새 표) 상태를 초기화한다.
-function tagMaterialSections(segments: ExtractedSegment[]): void {
-  let current: "관급자재" | "사급자재" | null = null;
-  let currentSheet: string | null | undefined;
-  let sheetSeen = false;
-  for (const segment of segments) {
-    if (!sheetSeen || segment.sheet !== currentSheet) {
-      current = null;
-      currentSheet = segment.sheet;
-      sheetSeen = true;
-    }
-    const label = segment.text.trim().replace(/[:：]\s*$/, "");
-    if (label === "관급자재" || label === "관급") {
-      current = "관급자재";
-    } else if (label === "사급자재" || label === "사급") {
-      current = "사급자재";
-    }
-    segment.section = current;
-  }
-}
-
-async function extractSegmentsImpl(filePath: string): Promise<ExtractedSegment[]> {
-  const extension = path.extname(filePath).toLowerCase();
-  // 컨테이너 종류를 먼저 보고, 확장자는 같은 컨테이너 안에서 포맷을 고르는
-  // 용도로만 쓴다 (sniffContainer 주석 참고).
-  const container = await sniffContainer(filePath);
-
-  if (container === "pdf") return extractPdf(filePath);
-
-  if (container === "ole") {
-    if (extension === ".xls") return extractLegacy(filePath, ".xls");
-    if (extension === ".doc") return extractLegacy(filePath, ".doc");
-    // .hwp / .hwpx / 확장자가 엉뚱한 경우까지 전부 HWP 5.0으로 본다.
-    try {
-      return await extractHwp5(filePath);
-    } catch {
-      // 암호화된 HWP 등 파서가 못 여는 경우에도 최소한 문자열은 건진다.
-      return extractLegacy(filePath, ".hwp");
-    }
-  }
-
-  if (container === "zip") {
-    // 묶음 ZIP은 extractZipRecursively가 먼저 풀어 개별 파일로 들어온다.
-    if (extension === ".zip") return [];
-    if ([".xlsx", ".xlsm"].includes(extension)) return extractXlsx(filePath);
-    if (extension === ".docx") {
-      return extractOfficeXml(filePath, /^word\/document\.xml$/i, "DOCX");
-    }
-    return extractOfficeXml(filePath, /^(?:Contents|contents)\/section\d+\.xml$/, "HWPX");
-  }
-
-  if ([".csv", ".txt", ".xml"].includes(extension)) {
-    const text = decodeText(await readFile(filePath));
-    return text.split(/\r?\n/).map((line, index) => ({
-      text: line,
-      sheet: extension === ".csv" ? "CSV" : null,
-      page: null,
-      location: `${index + 1}행`,
-    }));
-  }
-  return [];
-}
-
-export async function extractSegments(filePath: string): Promise<ExtractedSegment[]> {
-  const segments = await extractSegmentsImpl(filePath);
-  tagMaterialSections(segments);
-  return segments;
-}
 
 export function searchSegments(segments: ExtractedSegment[], keywords: readonly string[]): {
   keywordFound: boolean;
