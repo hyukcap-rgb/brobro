@@ -90,6 +90,8 @@ function decodeText(bytes: Buffer): string {
   }
 }
 
+const MAX_ZIP_ENTRY_BYTES = Number(process.env.MAX_ZIP_ENTRY_BYTES) || 200 * 1024 * 1024;
+
 async function openZip(filePath: string): Promise<unzipper.CentralDirectory> {
   try {
     return await unzipper.Open.file(filePath);
@@ -106,6 +108,15 @@ async function unzipText(
 ): Promise<string> {
   const entry = archive.files.find((candidate) => candidate.path === entryPath);
   if (!entry || entry.type === "Directory") return "";
+  // 장애 대응(2026-10-15): 7/15~16 기간 재검색 중 서버 프로세스가 오류 로그 없이
+  // 두 번 죽었다(같은 지점, 메모리 지표상 순간 급증 의심). 압축 해제 후 크기가
+  // 비정상적으로 큰 항목(압축 폭탄·손상 파일)을 통째로 메모리에 풀지 않고 건너뛴다.
+  const uncompressedSize = Number(entry.uncompressedSize ?? 0);
+  if (uncompressedSize > MAX_ZIP_ENTRY_BYTES) {
+    throw new Error(
+      `압축 해제 크기가 너무 큰 항목이라 건너뜀: ${entryPath} (${Math.round(uncompressedSize / 1024 / 1024)}MB)`,
+    );
+  }
   return decodeText(await entry.buffer());
 }
 

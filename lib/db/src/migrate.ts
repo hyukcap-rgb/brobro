@@ -97,7 +97,7 @@ export async function ensureSchema(): Promise<void> {
     -- 한다 — recoverOrphanedScanRuns()가 어차피 뒤이어 같은 일을 하므로 중복
     -- 정리는 안전하다.
     UPDATE daily_scan_runs
-      SET status = 'failed', error_message = '서버 재배포로 스캔이 중단되었습니다.', finished_at = now()
+      SET status = 'failed', error_message = '서버 재시작으로 스캔이 중단되었습니다.', finished_at = now()
       WHERE status = 'running';
 
     -- 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id

@@ -20,6 +20,7 @@ import { logger } from "./logger";
 
 export const EXTRACT_TIMEOUT_MS = Number(process.env.EXTRACT_TIMEOUT_MS) || 120_000;
 const SLOW_EXTRACT_LOG_MS = 15_000;
+const WORKER_MAX_OLD_GEN_MB = Number(process.env.EXTRACT_WORKER_MAX_OLD_GEN_MB) || 1024;
 
 // 빌드 산출물은 dist/index.mjs 옆에 dist/extract-worker.mjs로 나온다(build.mjs).
 const WORKER_PATH = path.resolve(import.meta.dirname, "extract-worker.mjs");
@@ -33,7 +34,12 @@ export class ExtractTimeoutError extends Error {
 
 function runInWorker(filePath: string, timeoutMs: number): Promise<ExtractedSegment[]> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(WORKER_PATH, { workerData: { filePath } });
+    // 워커 힙 상한: 비정상 파일이 메모리를 폭주시켜도 워커만 죽고(ERR_WORKER_OUT_OF_MEMORY)
+    // 웹 서버 프로세스 전체는 살아남게 한다.
+    const worker = new Worker(WORKER_PATH, {
+      workerData: { filePath },
+      resourceLimits: { maxOldGenerationSizeMb: WORKER_MAX_OLD_GEN_MB },
+    });
     let settled = false;
     const finish = (fn: () => void) => {
       if (settled) return;
@@ -67,6 +73,9 @@ export async function extractSegments(
   const fileName = path.basename(filePath);
   const sizeBytes = await stat(filePath).then((info) => info.size, () => null);
   const startedAt = Date.now();
+  // 장애 대응(2026-10-15): 프로세스가 로그 없이 죽으면 어떤 파일이 원인인지 알 수
+  // 없었다. 추출 직전에 파일명을 남겨, 다음에 죽으면 마지막 줄로 원인 파일을 특정한다.
+  logger.info({ fileName, sizeBytes }, "첨부파일 추출 시작");
   try {
     const segments = await runInWorker(filePath, timeoutMs);
     const elapsedMs = Date.now() - startedAt;
@@ -77,6 +86,8 @@ export async function extractSegments(
   } catch (error) {
     if (error instanceof ExtractTimeoutError) {
       logger.error({ fileName, sizeBytes, timeoutMs }, "첨부파일 텍스트 추출 시간 초과 — 워커 강제 종료, 이 파일은 건너뜀");
+    } else {
+      logger.warn({ fileName, sizeBytes, err: error }, "첨부파일 텍스트 추출 실패 — 이 파일은 건너뜀");
     }
     throw error;
   }

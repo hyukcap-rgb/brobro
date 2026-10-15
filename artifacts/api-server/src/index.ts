@@ -141,3 +141,23 @@ setInterval(() => {
   if (lagMs > 10_000) logger.warn({ lagMs }, "이벤트 루프(메인 스레드)가 오래 멈춰 있었음");
   lastEventLoopTick = now;
 }, EVENT_LOOP_CHECK_MS).unref();
+
+// 장애 대응(2026-10-15): 7/15~16 기간 재검색 중 서버가 오류 로그 없이 두 번
+// 재시작됐다(재배포 아님 — Railway가 죽은 프로세스를 자동 재기동). 처리되지 않은
+// 예외/거부가 프로세스를 죽이면 진행 중 스캔이 통째로 날아가므로, 로그를 남기고
+// 서버는 계속 살려 둔다. 종료 시점도 기록해 다음 재시작의 원인을 추적한다.
+process.on("unhandledRejection", (reason) => {
+  logger.error({ err: reason }, "처리되지 않은 Promise 거부 (서버는 계속 동작)");
+});
+process.on("uncaughtException", (err) => {
+  logger.error({ err }, "처리되지 않은 예외 (서버는 계속 동작)");
+});
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.once(signal, () => {
+    logger.warn({ signal }, "종료 신호 수신 — 서버 종료");
+    process.exit(0);
+  });
+}
+process.on("exit", (code) => {
+  logger.warn({ code }, "서버 프로세스 종료");
+});
