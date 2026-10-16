@@ -1214,10 +1214,6 @@ export default function Home() {
                                       <div className="space-y-0.5">
                                         <div><span className="text-muted-foreground">공사금액</span> 예산 {res.budgetAmount ?? '-'} / 추정 {res.estimatedAmount ?? '-'} / 기초 {res.baseAmount ?? '-'}</div>
                                         <div><span className="text-muted-foreground">공사개요</span> {res.constructionOverview ?? '미공개/확인불가'}</div>
-                                        <div className="flex items-start gap-1">
-                                          <MapPin className="w-3 h-3 mt-0.5 shrink-0 text-muted-foreground" />
-                                          {res.bidderAddress ?? '미공개/확인불가'}
-                                        </div>
                                         <div><span className="text-muted-foreground">연락처</span> {res.bidderPhone ?? '미공개/확인불가'}</div>
                                         <div>
                                           <span className="text-muted-foreground">연락처 출처</span>{' '}

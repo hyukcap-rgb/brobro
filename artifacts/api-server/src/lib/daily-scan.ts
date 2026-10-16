@@ -29,7 +29,7 @@ import { fetchLhAwardsForDate, type LhBidItem } from "./lh-source";
 import { getAppSettings } from "./settings";
 import { kstToday, shiftKstDate, isKoreanHoliday, type KstDate } from "./kr-holidays";
 import { SCAN_ROOT, resolveMatchAttachmentPath } from "./scan-storage";
-import { groupMatchesByNotice, listAwardedMatchesForRun } from "./matches-store";
+import { buildMatchesXlsx, groupMatchesByNotice, listAwardedMatchesForRun } from "./matches-store";
 import { sendScanResultEmail, type ScanResultEmailAttachment } from "./mailer";
 import { logger } from "./logger";
 
@@ -480,11 +480,13 @@ function isUsablePhone(phone: string | null | undefined): boolean {
   return Boolean(phone && !phone.includes("*"));
 }
 
-// 요구사항 7, 8: 정부 낙찰기록에 낙찰자 주소/전화가 비어있거나(위 마스킹 포함)
-// 쓸 수 없으면, 이미 다운로드해 둔 첨부파일 텍스트에서 먼저 찾아보고(무료),
-// 그래도 없으면 네이버 지역검색 API로 최후 보완한다(NAVER_CLIENT_ID/SECRET
-// 필요, 없으면 조용히 건너뜀). 어느 경로로 채웠는지는 contactSource로 남겨
-// 화면/엑셀에서 신뢰도를 구분할 수 있게 한다.
+// 요구사항 7, 8: 정부 낙찰기록에 낙찰자 전화가 비어있거나(위 마스킹 포함)
+// 쓸 수 없으면 첨부파일 → 조달청 등록정보 → 네이버 지역검색 → 웹 검색 순으로
+// 보완한다. 어느 경로로 채웠는지는 contactSource로 남긴다.
+// 요구사항(2026-10-17 사용자 요청: "낙찰자 사업장 주소는 필요없어. 삭제해줘.
+// 앞으로도 낙찰자 주소는 찾지마"): 낙찰자 사업장 주소는 더 이상 찾거나 저장하지
+// 않는다(반환값에서도 뺐다). 정부 낙찰기록에 원래 실려 온 주소(addressFromAward)는
+// 저장하지 않고, 포털/웹 전화번호 검색에서 동명 다른 업체를 거르는 지역 힌트로만 쓴다.
 async function resolveBidderContact(
   bidderName: string | null,
   addressFromAward: string | null,
@@ -492,81 +494,29 @@ async function resolveBidderContact(
   attachmentText: string,
   bizno: string | null,
 ): Promise<{
-  address: string | null;
   phone: string | null;
   contactSource: "government" | "attachment" | "registry" | "portal" | "web" | null;
 }> {
-  let address = addressFromAward;
-  let phone = isUsablePhone(phoneFromAward) ? phoneFromAward : null;
-  let contactSource: "government" | "attachment" | "registry" | "portal" | "web" | null = address || phone ? "government" : null;
-
-  if (!bidderName) return { address, phone, contactSource };
-  const needsAddress = !address;
-  const needsPhone = !phone;
-  if (!needsAddress && !needsPhone) return { address, phone, contactSource };
+  if (isUsablePhone(phoneFromAward)) return { phone: phoneFromAward, contactSource: "government" };
+  if (!bidderName) return { phone: null, contactSource: null };
 
   const fromAttachment = extractBusinessContactFromText(attachmentText, bidderName);
-  if (needsAddress && fromAttachment.address) {
-    address = fromAttachment.address;
-    contactSource = "attachment";
-  }
-  if (needsPhone && isUsablePhone(fromAttachment.phone)) {
-    phone = fromAttachment.phone ?? null;
-    contactSource = "attachment";
-  }
+  if (isUsablePhone(fromAttachment.phone)) return { phone: fromAttachment.phone ?? null, contactSource: "attachment" };
 
-  if (address && phone) return { address, phone, contactSource };
-
-  // 요구사항(2026-09-11 사용자 요청: 조달청 "나라장터 사용자정보 서비스"
-  // (조달업체 기본정보 조회) 공공데이터를 낙찰자 연락처 보강에 써달라고
-  // 요청 → "기존 낙찰자 정보를 이 API로 보강" 선택): 사업자등록번호를 알고
-  // 있으면 조달청에 정식 등록된 주소/전화를 정확 매칭으로 조회한다. 회사명
-  // 텍스트 검색인 Naver보다 신뢰도가 높으므로 그보다 먼저 시도한다.
   if (bizno) {
     const fromRegistry = await lookupGovCorpInfo(bizno);
-    if (fromRegistry) {
-      if (!address && fromRegistry.address) {
-        address = fromRegistry.address;
-        contactSource = "registry";
-      }
-      if (!phone && isUsablePhone(fromRegistry.phone)) {
-        phone = fromRegistry.phone ?? null;
-        contactSource = "registry";
-      }
-    }
-    if (address && phone) return { address, phone, contactSource };
-  }
-
-  // 요구사항(전화번호 정확도 보완, 2026-09-09 사용자 리포트: "회사이름과
-  // 주소를 교차검증하면 전화번호를 정확히 찾을 수 있을 것 같아"): 이미 알고
-  // 있는 주소(이 시점의 address)가 있으면 지역명을 검색어에 더하고, 결과
-  // 주소가 그 지역과 일치하는지 교차검증해 동명의 다른 업체를 걸러낸다.
-  const fromPortal = await searchBusinessContactOnPortal(bidderName, address);
-  if (fromPortal) {
-    if (!address && fromPortal.address) {
-      address = fromPortal.address;
-      contactSource = "portal";
-    }
-    if (!phone && isUsablePhone(fromPortal.phone)) {
-      phone = fromPortal.phone ?? null;
-      contactSource = "portal";
+    if (fromRegistry && isUsablePhone(fromRegistry.phone)) {
+      return { phone: fromRegistry.phone ?? null, contactSource: "registry" };
     }
   }
 
-  // 요구사항(전화번호 검색 보완, 2026-09-09): 네이버 지역검색은 "스마트플레이스"
-  // 등록 업체만 색인해서 협동조합·비영리단체 등은 못 찾는 경우가 있다(명문사회적
-  // 협동조합 사례). 그래도 전화번호가 여전히 없으면 더 넓게 색인된 네이버
-  // 웹문서/블로그 검색으로 최후 보완한다. 텍스트 검색결과에서 정규식으로 뽑아내는
-  // 값이라 정확도는 낮으므로 contactSource를 "web"으로 따로 남긴다.
-  if (!phone) {
-    const fromWeb = await searchBusinessContactOnWeb(bidderName, address);
-    if (fromWeb && isUsablePhone(fromWeb.phone)) {
-      phone = fromWeb.phone ?? null;
-      contactSource = "web";
-    }
-  }
+  const fromPortal = await searchBusinessContactOnPortal(bidderName, addressFromAward);
+  if (fromPortal && isUsablePhone(fromPortal.phone)) return { phone: fromPortal.phone ?? null, contactSource: "portal" };
 
-  return { address, phone, contactSource };
+  const fromWeb = await searchBusinessContactOnWeb(bidderName, addressFromAward);
+  if (fromWeb && isUsablePhone(fromWeb.phone)) return { phone: fromWeb.phone ?? null, contactSource: "web" };
+
+  return { phone: null, contactSource: null };
 }
 
 // 서버가 재시작/재배포되면 그 순간 진행 중이던 스캔은 메모리와 함께 그대로
@@ -1073,9 +1023,9 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                 // 있게 한다 — 여기서는 자리만 null로 잡아두고 나중에 채운다.
                 const siteAddress: string | null = null;
 
-                // 요구사항 7, 8: 낙찰자 연락처/주소 — 정부 기록에 없으면 첨부파일,
-                // 그래도 없으면 네이버 API로 보완.
-                const { address: bidderAddress, phone: bidderPhone, contactSource } = await resolveBidderContactCached(
+                // 요구사항 7, 8: 낙찰자 전화 — 정부 기록에 없으면 첨부파일,
+                // 그래도 없으면 네이버 API로 보완. (2026-10-17: 사업장 주소는 찾지 않음)
+                const { phone: bidderPhone, contactSource } = await resolveBidderContactCached(
                   String(award.bidwinnrNm ?? "").trim() || null,
                   String(award.bidwinnrAdrs ?? "").trim() || null,
                   String(award.bidwinnrTelNo ?? "").trim() || null,
@@ -1100,7 +1050,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                     demandAgency: String(detail.dminsttNm ?? award.dminsttNm ?? "").trim() || null,
                     bidderName: String(award.bidwinnrNm ?? "").trim() || null,
                     bidderBizno: String(award.bidwinnrBizno ?? "").trim() || null,
-                    bidderAddress,
+                    bidderAddress: null,
                     bidderPhone,
                     contactSource,
                     budgetAmount: budgetAmount || null,
@@ -1606,20 +1556,42 @@ async function sendScheduleResultEmailIfNeeded(run: DailyScanRun): Promise<void>
       return parseQuantityForSort(b.representative.quantityText) - parseQuantityForSort(a.representative.quantityText);
     });
 
-    await sendScanResultEmail({
-      to: settings.notificationEmails,
-      dateLabel: formatDateLabel(run.targetDates),
-      matches: sortedNoticeGroups.map(({ representative: match, count }) => ({
-        siteName: match.siteName,
-        noticeName: match.noticeName,
-        demandAgency: match.demandAgency,
-        bidderName: match.bidderName,
-        matchedKeyword: count > 1 ? `${match.matchedKeyword} 외${count - 1}건` : match.matchedKeyword,
-        quantityText: match.quantityText,
-        attachmentFileName: match.attachmentFileName,
-      })),
-      attachments,
-    });
+    // 요구사항(2026-10-17 사용자 요청: "매일 이메일로 보낼 때 당일 검색 결과에서
+    // 조건에 맞는 값의 엑셀파일을 하나 더 만들어서 함께 메일로 보내줘"): 메일 본문
+    // 표에 들어간 것과 같은 이번 실행의 매칭(같은 정렬 순서)으로 엑셀을 만들어
+    // 첨부파일 맨 앞에 붙인다. 화면 "엑셀 다운로드"와 같은 형식(시트1: 검색결과,
+    // 시트2: 내역서 없는 공고)이다. 엑셀 생성이 실패해도 메일은 그대로 보낸다.
+    const dateLabel = formatDateLabel(run.targetDates);
+    const excelLabel = dateLabel.replace("/", "월") + "일";
+    let excelPath: string | null = null;
+    try {
+      excelPath = await buildMatchesXlsx(
+        sortedNoticeGroups.flatMap((group) => group.members),
+        { sheet1Name: `검색결과_${excelLabel}`, fileStem: `daily_${run.id}` },
+      );
+      attachments.unshift({ filename: `나라장터_검색결과_${excelLabel}.xlsx`, path: excelPath });
+    } catch (error) {
+      logger.warn({ err: error, runId: run.id }, "일일 검색결과 메일: 엑셀 생성 실패 - 엑셀 없이 발송");
+    }
+
+    try {
+      await sendScanResultEmail({
+        to: settings.notificationEmails,
+        dateLabel,
+        matches: sortedNoticeGroups.map(({ representative: match, count }) => ({
+          siteName: match.siteName,
+          noticeName: match.noticeName,
+          demandAgency: match.demandAgency,
+          bidderName: match.bidderName,
+          matchedKeyword: count > 1 ? `${match.matchedKeyword} 외${count - 1}건` : match.matchedKeyword,
+          quantityText: match.quantityText,
+          attachmentFileName: match.attachmentFileName,
+        })),
+        attachments,
+      });
+    } finally {
+      if (excelPath) await rm(excelPath, { force: true }).catch(() => undefined);
+    }
   } catch (error) {
     logger.error({ err: error, runId: run.id }, "일일 검색결과 메일 발송 처리 중 오류");
   }

@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { ensureAdminSeeded, ensureExtraAdminSeeded } from "./lib/auth";
 import { startDailyScanScheduler, startAttachmentCleanupScheduler } from "./lib/scheduler";
 import { recoverOrphanedScanRuns } from "./lib/daily-scan";
+import { clearStoredBidderAddresses } from "./lib/matches-store";
 import { sendTestEmail } from "./lib/mailer";
 import { requestBuffer, formatServiceKey, compactDate } from "./lib/bid-processing";
 import { ensureSchema } from "@workspace/db";
@@ -112,6 +113,10 @@ ensureSchema()
   .then(() => ensureAdminSeeded())
   .then(() => ensureExtraAdminSeeded())
   .then(() => recoverOrphanedScanRuns())
+  .then(async () => {
+    const cleared = await clearStoredBidderAddresses();
+    if (cleared > 0) logger.info({ cleared }, "저장돼 있던 낙찰자 사업장 주소 삭제");
+  })
   .then(() => startDailyScanScheduler())
   .then(() => startAttachmentCleanupScheduler())
   .then(() => maybeSendTestEmail())

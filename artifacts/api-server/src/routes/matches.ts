@@ -94,34 +94,27 @@ router.post("/matches/:id/refresh-contact", async (req, res) => {
     res.status(400).json({ error: "낙찰자명이 없어 검색할 수 없습니다." });
     return;
   }
-  const phoneUsable = isUsablePhone(match.bidderPhone);
-  if (phoneUsable && match.bidderAddress) {
-    res.json({ updated: false, reason: "이미 유효한 연락처가 있습니다.", bidderPhone: match.bidderPhone, bidderAddress: match.bidderAddress });
+  // 요구사항(2026-10-17 사용자 요청: "앞으로도 낙찰자 주소는 찾지마"): 전화번호만
+  // 다시 찾는다. 사업장 주소는 찾지도 저장하지도 않는다.
+  if (isUsablePhone(match.bidderPhone)) {
+    res.json({ updated: false, reason: "이미 유효한 연락처가 있습니다.", bidderPhone: match.bidderPhone });
     return;
   }
-  // 요구사항(전화번호 정확도 보완, 2026-09-09 사용자 리포트: "회사이름과
-  // 주소를 교차검증하면 전화번호를 정확히 찾을 수 있을 것 같아"): 이미
-  // 알고 있는 주소가 있으면 검색에 지역명을 더하고 결과 주소와 교차검증해
-  // 동명의 다른 업체를 걸러낸다.
-  const found = await searchBusinessContactOnPortal(match.bidderName, match.bidderAddress);
-  const patch: { bidderPhone?: string; bidderAddress?: string; contactSource: string } = { contactSource: "portal" };
-  if (!phoneUsable && found?.phone) patch.bidderPhone = found.phone;
-  if (!match.bidderAddress && found?.address) patch.bidderAddress = found.address;
+  const patch: { bidderPhone?: string; contactSource: string } = { contactSource: "portal" };
+  const found = await searchBusinessContactOnPortal(match.bidderName, null);
+  if (found?.phone) patch.bidderPhone = found.phone;
 
-  // 요구사항(전화번호 검색 보완, 2026-09-09 사용자 리포트: "너가 생각했을 때
-  // 내가 전화번호를 찾아내고 싶어. 방법을 만들어봐"): 네이버 지역검색은
-  // "스마트플레이스" 등록 업체만 색인해서 협동조합·비영리단체 등은 못 찾는
-  // 경우가 있다(명문사회적협동조합 사례로 확인됨). 전화번호를 여전히 못 찾았
-  // 으면 더 넓게 색인된 네이버 웹문서/블로그 검색으로 한 번 더 시도한다.
-  if (!patch.bidderPhone && !phoneUsable) {
-    const fromWeb = await searchBusinessContactOnWeb(match.bidderName, match.bidderAddress ?? patch.bidderAddress);
+  // 요구사항(전화번호 검색 보완, 2026-09-09): 네이버 지역검색에서 못 찾으면
+  // 더 넓게 색인된 네이버 웹문서/블로그 검색으로 한 번 더 시도한다.
+  if (!patch.bidderPhone) {
+    const fromWeb = await searchBusinessContactOnWeb(match.bidderName, null);
     if (fromWeb?.phone) {
       patch.bidderPhone = fromWeb.phone;
       patch.contactSource = "web";
     }
   }
 
-  if (!patch.bidderPhone && !patch.bidderAddress) {
+  if (!patch.bidderPhone) {
     res.json({ updated: false, reason: "네이버 검색에서 연락처를 찾지 못했습니다." });
     return;
   }
@@ -130,7 +123,7 @@ router.post("/matches/:id/refresh-contact", async (req, res) => {
     .set(patch)
     .where(eq(awardedMatchesTable.id, id))
     .returning();
-  res.json({ updated: true, bidderPhone: updated.bidderPhone, bidderAddress: updated.bidderAddress, contactSource: updated.contactSource });
+  res.json({ updated: true, bidderPhone: updated.bidderPhone, contactSource: updated.contactSource });
 });
 
 router.get("/matches/:id/attachment", async (req, res) => {

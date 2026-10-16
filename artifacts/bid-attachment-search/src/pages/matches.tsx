@@ -817,9 +817,11 @@ export default function Matches() {
                       해줘. 현장주소가 가장 중요해"): 영업 대상은 실제 공사가
                       진행되는 현장이므로, 기본으로 보이는 값과 팝오버 첫 줄을
                       현장 주소 우선으로 바꾸고, 사업자 주소는 그 아래 보조
-                      정보로 내린다. */}
+                      정보로 내린다. 변경(2026-10-17 사용자 요청: "낙찰자 사업장
+                      주소는 필요없어. 삭제해줘"): 사업자 주소는 더 이상 보여주지
+                      않는다 — 현장 주소만 표시한다. */}
                       <TableCell className="px-2 text-muted-foreground">
-                        {match.siteAddress || match.bidderAddress ? (
+                        {match.siteAddress ? (
                           <Popover>
                             <PopoverTrigger asChild>
                               <button
@@ -827,17 +829,13 @@ export default function Matches() {
                                 className="flex w-full min-w-0 items-start gap-1.5 text-left hover:text-foreground"
                               >
                                 <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                                <span className="min-w-0 truncate">{match.siteAddress ?? match.bidderAddress}</span>
+                                <span className="min-w-0 truncate">{match.siteAddress}</span>
                               </button>
                             </PopoverTrigger>
                             <PopoverContent className="w-80 space-y-2 text-xs">
                               <div>
                                 <div className="font-medium text-foreground">현장 주소</div>
-                                <div className="text-muted-foreground">{match.siteAddress ?? "주소 미확인"}</div>
-                              </div>
-                              <div>
-                                <div className="font-medium text-foreground">사업자 주소</div>
-                                <div className="text-muted-foreground">{match.bidderAddress ?? "주소 미확인"}</div>
+                                <div className="text-muted-foreground">{match.siteAddress}</div>
                               </div>
                             </PopoverContent>
                           </Popover>

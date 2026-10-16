@@ -686,7 +686,6 @@ export interface SearchResult {
   awardIdentifier?: string;
   awardDate?: string;
   awardAmount?: string;
-  bidderAddress?: string;
   bidderPhone?: string;
   budgetAmount?: string;
   estimatedAmount?: string;
@@ -1423,81 +1422,51 @@ export async function searchBusinessContactOnWeb(
 // 됐다. 매번 result의 현재 값을 다시 읽어야 하므로(단계마다 값이 채워질 수
 // 있음) 캐싱이 아니라 헬퍼 함수로만 추출한다 — 호출 시점의 result 상태를
 // 그대로 평가하므로 판정 결과는 이전과 동일하다.
-function needsBusinessAddress(result: SearchResult): boolean {
-  return !result.bidderAddress || result.bidderAddress === "미공개/확인불가";
-}
 function needsBusinessPhone(result: SearchResult): boolean {
   return !result.bidderPhone || result.bidderPhone === "미공개/확인불가" || result.bidderPhone.includes("*");
 }
 
-// Fills in bidderAddress/bidderPhone when the government award record left
-// them blank: the notice's own attachments are tried first (free), then the
-// portal search (rate-limited, needs credentials).
+// 요구사항(2026-10-17 사용자 요청: "낙찰자 사업장 주소는 필요없어. 삭제해줘.
+// 앞으로도 낙찰자 주소는 찾지마"): 낙찰자 사업장 주소는 더 이상 찾거나 저장하지
+// 않는다. 이 함수는 이제 전화번호만 보완한다(첨부파일 → 조달청 등록정보 →
+// 포털 → 웹 순). 정부 낙찰기록에 원래 실려 온 주소(knownAddress)는 저장하지
+// 않고, 포털/웹 전화번호 검색에서 동명 다른 업체를 거르는 지역 힌트로만 쓴다.
 async function fillMissingBusinessContact(
   job: CollectionJob,
   result: SearchResult,
   bizno?: string | null,
+  knownAddress?: string | null,
 ): Promise<void> {
   if (!result.bidderName || result.bidderName === "미공개/확인불가") return;
-  const needsAddress = needsBusinessAddress(result);
-  const needsPhone = needsBusinessPhone(result);
-  if (!needsAddress && !needsPhone) return;
+  if (!needsBusinessPhone(result)) return;
 
   const fromAttachment = await findBusinessContactInAttachments(job, result.noticeNumber, result.bidderName);
-  if (needsAddress && fromAttachment.address) {
-    result.bidderAddress = fromAttachment.address;
-    result.contactSource ??= "attachment";
-  }
-  if (needsPhone && fromAttachment.phone) {
+  if (fromAttachment.phone) {
     result.bidderPhone = fromAttachment.phone;
     result.contactSource ??= "attachment";
+    return;
   }
 
-  let stillNeedsAddress = needsBusinessAddress(result);
-  let stillNeedsPhone = needsBusinessPhone(result);
-  if (!stillNeedsAddress && !stillNeedsPhone) return;
-
-  // 요구사항(2026-09-11 사용자 요청): 정부 낙찰기록/첨부파일에도 없으면,
-  // 네이버 검색(회사명 텍스트 매칭이라 동명업체 오류 가능)보다 먼저 사업자
-  // 등록번호로 조달청 정식 등록정보를 정확 매칭 조회한다.
   if (bizno) {
     const fromRegistry = await lookupGovCorpInfo(bizno);
-    if (fromRegistry) {
-      if (stillNeedsAddress && fromRegistry.address) {
-        result.bidderAddress = fromRegistry.address;
-        result.contactSource ??= "registry";
-      }
-      if (stillNeedsPhone && fromRegistry.phone) {
-        result.bidderPhone = fromRegistry.phone;
-        result.contactSource ??= "registry";
-      }
-    }
-    stillNeedsAddress = needsBusinessAddress(result);
-    stillNeedsPhone = needsBusinessPhone(result);
-    if (!stillNeedsAddress && !stillNeedsPhone) return;
-  }
-
-  const knownAddress = needsBusinessAddress(result) ? null : result.bidderAddress;
-
-  const fromPortal = await searchBusinessContactOnPortal(result.bidderName, knownAddress);
-  if (fromPortal) {
-    if (stillNeedsAddress && fromPortal.address) {
-      result.bidderAddress = fromPortal.address;
-      result.contactSource ??= "portal";
-    }
-    if (stillNeedsPhone && fromPortal.phone) {
-      result.bidderPhone = fromPortal.phone;
-      result.contactSource ??= "portal";
+    if (fromRegistry?.phone) {
+      result.bidderPhone = fromRegistry.phone;
+      result.contactSource ??= "registry";
+      return;
     }
   }
 
-  const stillNeedsPhoneAfterPortal = needsBusinessPhone(result);
-  if (stillNeedsPhoneAfterPortal) {
-    const fromWeb = await searchBusinessContactOnWeb(result.bidderName, knownAddress);
-    if (fromWeb?.phone) {
-      result.bidderPhone = fromWeb.phone;
-      result.contactSource = "web";
-    }
+  const fromPortal = await searchBusinessContactOnPortal(result.bidderName, knownAddress ?? null);
+  if (fromPortal?.phone) {
+    result.bidderPhone = fromPortal.phone;
+    result.contactSource ??= "portal";
+    return;
+  }
+
+  const fromWeb = await searchBusinessContactOnWeb(result.bidderName, knownAddress ?? null);
+  if (fromWeb?.phone) {
+    result.bidderPhone = fromWeb.phone;
+    result.contactSource = "web";
   }
 }
 
@@ -1512,16 +1481,20 @@ async function enrichKeywordResults(job: CollectionJob, awards: Map<string, Reco
       : "미공개/확인불가";
     result.awardDate = String(award?.fnlSucsfDate ?? award?.rlOpengDt ?? "미공개/확인불가");
     result.awardAmount = String(award?.sucsfbidAmt ?? "미공개/확인불가");
-    result.bidderAddress = String(award?.bidwinnrAdrs ?? "미공개/확인불가");
     result.bidderPhone = String(award?.bidwinnrTelNo ?? "미공개/확인불가");
     result.budgetAmount = notice?.budgetAmount ?? "미공개/확인불가";
     result.estimatedAmount = notice?.estimatedAmount ?? "미공개/확인불가";
     result.baseAmount = notice?.baseAmount ?? "미공개/확인불가";
     result.constructionOverview = notice?.constructionOverview ?? "미공개/확인불가";
     result.awardStatus = award ? "confirmed" : "not_found";
-    result.contactSource = award?.bidwinnrAdrs || award?.bidwinnrTelNo ? "government" : undefined;
+    result.contactSource = award?.bidwinnrTelNo ? "government" : undefined;
     try {
-      await fillMissingBusinessContact(job, result, award?.bidwinnrBizno ? String(award.bidwinnrBizno).trim() : null);
+      await fillMissingBusinessContact(
+        job,
+        result,
+        award?.bidwinnrBizno ? String(award.bidwinnrBizno).trim() : null,
+        award?.bidwinnrAdrs ? String(award.bidwinnrAdrs) : null,
+      );
     } catch (error) {
       logger.warn(
         { err: error, noticeNumber: result.noticeNumber, bidderName: result.bidderName },
@@ -2424,7 +2397,6 @@ const RESULT_HEADERS = [
   "추정가격",
   "기초금액",
   "공사 규모/개요",
-  "낙찰자 주소",
   "낙찰자 연락처",
   "출처 유형",
   "첨부 검색 상태",
@@ -2491,7 +2463,6 @@ function resultRows(job: CollectionJob): unknown[][] {
       item.estimatedAmount,
       item.baseAmount,
       item.constructionOverview,
-      item.bidderAddress,
       item.bidderPhone,
       "첨부파일 / 입찰공고 / 낙찰정보",
       {
@@ -2509,9 +2480,9 @@ function resultRows(job: CollectionJob): unknown[][] {
           ? (item.awardStatus === "confirmed" ? "SUCCESS" : "NOT_FOUND")
           : "NOT_APPLICABLE",
       item.keywordFound
-        ? !item.bidderPhone && !item.bidderAddress
+        ? !item.bidderPhone
           ? "NOT_APPLICABLE"
-          : item.bidderPhone !== "미공개/확인불가" || item.bidderAddress !== "미공개/확인불가"
+          : item.bidderPhone !== "미공개/확인불가"
             ? {
                 government: "GOV_API_FOUND",
                 attachment: "ATTACHMENT_FOUND",

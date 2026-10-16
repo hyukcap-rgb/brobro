@@ -3,7 +3,7 @@ import path from "node:path";
 import { createReadStream } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Response } from "express";
-import { and, count, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { db, awardedMatchesTable, dailyScanRunsTable, type AwardedMatch, type DailyScanRun } from "@workspace/db";
 import { command } from "./bid-processing";
 
@@ -207,8 +207,9 @@ function formatMatchedKeywordCell(representative: AwardedMatch, count: number): 
 
 const MATCH_HEADERS = [
   "공고번호", "현장명(공고명)", "발주기관", "업무구분", "공종", "낙찰자", "사업자등록번호",
-  // 요구사항(2026-09-13: 사업자 주소와 실제 공사현장 주소를 둘 다 보여줌).
-  "사업자 주소", "현장 주소", "낙찰자 전화", "연락처 출처", "현장사무소", "부직포 수량",
+  // 요구사항(2026-10-17 사용자 요청: "낙찰자 사업장 주소는 필요없어. 삭제해줘"):
+  // "사업자 주소" 열을 뺐다. 현장 주소만 남긴다.
+  "현장 주소", "낙찰자 전화", "연락처 출처", "현장사무소", "부직포 수량",
   "추정가격", "예산금액", "낙찰금액", "낙찰일", "매칭 키워드", "첨부파일명", "확인시각",
 ];
 
@@ -229,7 +230,6 @@ function matchRow(match: AwardedMatch, keywordCount = 1): string[] {
     match.workTypeName ?? "",
     match.bidderName ?? "",
     match.bidderBizno ?? "",
-    match.bidderAddress ?? "",
     match.siteAddress ?? "",
     match.bidderPhone ?? "",
     (match.contactSource && CONTACT_SOURCE_LABELS[match.contactSource]) ?? "",
@@ -294,7 +294,19 @@ function buildSheetXml(rows: string[][]): string {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetRows}</sheetData></worksheet>`;
 }
 
-export async function buildMatchesXlsx(matches: AwardedMatch[]): Promise<string> {
+export interface BuildMatchesXlsxOptions {
+  /** 첫 번째 시트 이름. 기본 "누적결과". */
+  sheet1Name?: string;
+  /** 서버 임시 파일명 앞부분(다운로드 이름과는 별개). 기본 "누적_낙찰검색결과". */
+  fileStem?: string;
+}
+
+export async function buildMatchesXlsx(
+  matches: AwardedMatch[],
+  options: BuildMatchesXlsxOptions = {},
+): Promise<string> {
+  const sheet1Name = xmlEscape(options.sheet1Name ?? "누적결과");
+  const fileStem = (options.fileStem ?? "누적_낙찰검색결과").replace(/[\\/]/g, "_");
   // 요구사항(2026-09-24: 엑셀도 공고 단위로 한 행 + "외N건"): 시트1(누적결과)은
   // 공고 단위로 묶은 모든 그룹, 시트2("내역서 없는 공고")는 그중 매칭된
   // 첨부파일 어디에도 "내역서"가 없는 공고만 추린다(2026-09-18 요구사항과
@@ -317,7 +329,7 @@ export async function buildMatchesXlsx(matches: AwardedMatch[]): Promise<string>
   );
   await writeFile(
     path.join(workbookDir, "xl", "workbook.xml"),
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="누적결과" sheetId="1" r:id="rId1"/><sheet name="내역서 없는 공고" sheetId="2" r:id="rId2"/></sheets></workbook>`,
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${sheet1Name}" sheetId="1" r:id="rId1"/><sheet name="내역서 없는 공고" sheetId="2" r:id="rId2"/></sheets></workbook>`,
   );
   await writeFile(
     path.join(workbookDir, "xl", "_rels", "workbook.xml.rels"),
@@ -325,10 +337,23 @@ export async function buildMatchesXlsx(matches: AwardedMatch[]): Promise<string>
   );
   await writeFile(path.join(workbookDir, "xl", "worksheets", "sheet1.xml"), buildSheetXml(sheet1Rows));
   await writeFile(path.join(workbookDir, "xl", "worksheets", "sheet2.xml"), buildSheetXml(sheet2Rows));
-  const output = path.join(workbookDir, "..", `누적_낙찰검색결과_${Date.now()}.xlsx`);
+  const output = path.join(workbookDir, "..", `${fileStem}_${Date.now()}.xlsx`);
   await command("zip", ["-qr", output, "."], workbookDir);
   await rm(workbookDir, { recursive: true, force: true });
   return output;
+}
+
+// 요구사항(2026-10-17 사용자 요청: "낙찰자 사업장 주소는 필요없어. 삭제해줘.
+// 앞으로도 낙찰자 주소는 찾지마"): 이미 저장돼 있던 낙찰자 사업장 주소도 지운다.
+// 서버가 뜰 때마다 실행하지만 남은 값이 없으면 아무것도 바꾸지 않는다(멱등).
+// 열 자체는 남겨 두어(항상 NULL) 스키마 변경 없이 배포할 수 있게 했다.
+export async function clearStoredBidderAddresses(): Promise<number> {
+  const cleared = await db
+    .update(awardedMatchesTable)
+    .set({ bidderAddress: null })
+    .where(isNotNull(awardedMatchesTable.bidderAddress))
+    .returning({ id: awardedMatchesTable.id });
+  return cleared.length;
 }
 
 export function sendDownload(res: Response, filePath: string, fileName: string): void {
