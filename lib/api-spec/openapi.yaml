@@ -221,6 +221,30 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /scans/{id}/cancel:
+    post:
+      operationId: cancelScan
+      tags: [scans]
+      summary: Stop a running scan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Scan run cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanRun"
+        "409":
+          description: Scan is not running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /scans/run:
     post:
       operationId: triggerScan
@@ -965,10 +989,10 @@ components:
             type: string
         status:
           type: string
-          enum: [running, completed, failed]
+          enum: [running, completed, failed, cancelled]
         triggerType:
           type: string
-          enum: [schedule, manual]
+          enum: [schedule, manual, range]
         awardsFound:
           type: number
         candidatesChecked:

@@ -94,6 +94,55 @@ export class ScanAlreadyRunningError extends Error {
   }
 }
 
+// 요구사항(2026-10-18 사용자 요청: "지금 돌고있는 검색을 중지 시킬 수 있는 중지
+// 버튼도 필요함"): 진행 중인 스캔을 화면에서 멈출 수 있게 한다. 중지 요청이
+// 오면 DB 행을 바로 "cancelled"로 바꿔(동시실행 유니크 인덱스가 곧바로 풀려
+// 다른 검색을 바로 시작할 수 있다) 화면에 즉시 반영하고, 백그라운드에서 돌던
+// executeScanRun은 다음 확인 지점(날짜·공고·첨부파일 단위)에서 이 집합을 보고
+// 멈춘다.
+const cancelRequestedRunIds = new Set<number>();
+
+class ScanCancelledError extends Error {
+  constructor() {
+    super("사용자가 검색을 중지했습니다.");
+    this.name = "ScanCancelledError";
+  }
+}
+
+function throwIfCancelled(runId: number): void {
+  if (cancelRequestedRunIds.has(runId)) throw new ScanCancelledError();
+}
+
+export const SCAN_CANCELLED_MESSAGE = "사용자가 검색을 중지했습니다.";
+
+// 반환: 중지한 실행 기록(없거나 이미 끝난 실행이면 null)
+export async function cancelScanRun(adminUserId: number, runId: number): Promise<DailyScanRun | null> {
+  const [cancelled] = await db
+    .update(dailyScanRunsTable)
+    .set({ status: "cancelled", errorMessage: SCAN_CANCELLED_MESSAGE, finishedAt: new Date() })
+    .where(
+      and(
+        eq(dailyScanRunsTable.id, runId),
+        eq(dailyScanRunsTable.adminUserId, adminUserId),
+        eq(dailyScanRunsTable.status, "running"),
+      ),
+    )
+    .returning();
+  if (!cancelled) return null;
+  cancelRequestedRunIds.add(runId);
+  logger.info({ runId, adminUserId }, "스캔 중지 요청");
+  return cancelled;
+}
+
+export async function getRunningScanRun(adminUserId: number): Promise<DailyScanRun | null> {
+  const [running] = await db
+    .select()
+    .from(dailyScanRunsTable)
+    .where(and(eq(dailyScanRunsTable.adminUserId, adminUserId), eq(dailyScanRunsTable.status, "running")))
+    .limit(1);
+  return running ?? null;
+}
+
 // 실사용 검증(2026-09-11): 동시 실행 두 건을 실제로 겹쳐 보내 확인한 결과, DB
 // 유니크 인덱스 위반은 발생했지만 이 함수가 이를 감지하지 못해 500(진짜 오류)로
 // 새어나갔다 — drizzle-orm(node-postgres)가 실제 pg 오류를 최상위 error.code가
@@ -590,7 +639,14 @@ export async function createPendingScanRun(
     // 기준이라(migrate.ts 참고), 같은 계정 안에서만 중복 실행을 막는다.
     [run] = await db
       .insert(dailyScanRunsTable)
-      .values({ adminUserId, targetDates: targetDates.map((d) => d.key), status: "running", triggerType })
+      // 요구사항(2026-10-18): 실행 기록에서 "지금 실행"과 "기간 지정"을 구분해
+      // 보여주기 위해, 명시적 기간 요청은 triggerType "range"로 남긴다.
+      .values({
+        adminUserId,
+        targetDates: targetDates.map((d) => d.key),
+        status: "running",
+        triggerType: explicitDateRange ? "range" : triggerType,
+      })
       .returning();
   } catch (error) {
     if (isUniqueViolation(error)) {
@@ -681,6 +737,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
     for (const source of workSources) {
       const awardItems: Record<string, unknown>[] = [];
       for (const date of fetchDates) {
+        throwIfCancelled(run.id);
         try {
           awardItems.push(...(await fetchAwardsForDate(date, source)));
         } catch (error) {
@@ -712,6 +769,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         const bidNtceNo = String(award.bidNtceNo ?? "").trim();
         const bidNtceOrd = String(award.bidNtceOrd ?? "").trim();
         if (!bidNtceNo || !bidNtceOrd) continue;
+        throwIfCancelled(run.id);
         const noticeNumber = `${bidNtceNo}-${bidNtceOrd.padStart(3, "0")}`;
         candidatesChecked += 1;
 
@@ -864,6 +922,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         const scratchDir = await mkdtemp(path.join(tmpdir(), "daily-scan-"));
         try {
           for (const attachment of attachments) {
+            throwIfCancelled(run.id);
             let downloadedPath: string;
             try {
               // 요구사항(첨부파일 보관, 2026-09-09): 일시적 네트워크 오류로 매칭
@@ -1288,6 +1347,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
     // 업체정보 없이 출시") — lh-source.ts 상단 주석 참고.
     if (settings.enabledSources.includes("LH")) {
       for (const dateKey of targetDateKeys) {
+        throwIfCancelled(run.id);
         const date = kstDateFromKey(dateKey);
         let lhAwards: LhBidItem[] = [];
         try {
@@ -1300,6 +1360,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
 
         for (const award of lhAwards) {
           if (!award.bidNum || !award.noticeName) continue;
+          throwIfCancelled(run.id);
           candidatesChecked += 1;
 
           // 요구사항(2026-09-15 사용자 요청: 2차 키워드 — 낙찰금액과 공사제목만
@@ -1443,13 +1504,25 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
       funnel.quotaExceeded > 0
         ? `공공데이터포털(data.go.kr) 일일 호출 한도 초과로 ${funnel.quotaExceeded}건의 공고 상세를 확인하지 못했습니다. 보통 자정(KST) 이후 한도가 초기화되니 내일 다시 확인해 주세요.`
         : null;
+    // 중지된 실행(status가 이미 "cancelled")을 "completed"로 덮어쓰지 않도록
+    // running 상태일 때만 갱신한다.
     const [completed] = await db
       .update(dailyScanRunsTable)
       .set({ status: "completed", awardsFound, candidatesChecked, matchesFound, finishedAt: new Date(), errorMessage })
-      .where(eq(dailyScanRunsTable.id, run.id))
+      .where(and(eq(dailyScanRunsTable.id, run.id), eq(dailyScanRunsTable.status, "running")))
       .returning();
-    return completed ?? run;
+    if (!completed) return (await getScanRunById(run.id)) ?? run;
+    return completed;
   } catch (error) {
+    if (error instanceof ScanCancelledError) {
+      logger.info({ runId: run.id, candidatesChecked, matchesFound }, "일별 스캔: 사용자 요청으로 중지");
+      const [cancelled] = await db
+        .update(dailyScanRunsTable)
+        .set({ awardsFound, candidatesChecked, matchesFound })
+        .where(eq(dailyScanRunsTable.id, run.id))
+        .returning();
+      return cancelled ?? run;
+    }
     const message = describeError(error);
     logger.error({ err: error, runId: run.id }, "일별 스캔 실패");
     const [failed] = await db
@@ -1462,10 +1535,17 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         errorMessage: message,
         finishedAt: new Date(),
       })
-      .where(eq(dailyScanRunsTable.id, run.id))
+      .where(and(eq(dailyScanRunsTable.id, run.id), eq(dailyScanRunsTable.status, "running")))
       .returning();
-    return failed ?? run;
+    return failed ?? (await getScanRunById(run.id)) ?? run;
+  } finally {
+    cancelRequestedRunIds.delete(run.id);
   }
+}
+
+async function getScanRunById(runId: number): Promise<DailyScanRun | undefined> {
+  const [row] = await db.select().from(dailyScanRunsTable).where(eq(dailyScanRunsTable.id, runId)).limit(1);
+  return row;
 }
 
 // Convenience wrapper for callers that want to await the whole thing (the
@@ -1482,7 +1562,7 @@ export async function runDailyScan(
   // 보내지도록 해주고"): 매일 07시 자동 스캔(schedule)에서만 메일을 보낸다.
   // 화면에서 수동으로 "지금 실행"/"기간 지정 재검색"을 누를 때마다 메일이
   // 오면 번거롭기 때문이다.
-  if (triggerType === "schedule") {
+  if (triggerType === "schedule" && completed.status !== "cancelled") {
     await sendScheduleResultEmailIfNeeded(completed);
   }
   return completed;

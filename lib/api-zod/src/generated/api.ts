@@ -188,8 +188,8 @@ export const ListScansResponse = zod.object({
   "scans": zod.array(zod.object({
   "id": zod.number(),
   "targetDates": zod.array(zod.string()),
-  "status": zod.enum(['running', 'completed', 'failed']),
-  "triggerType": zod.enum(['schedule', 'manual']),
+  "status": zod.enum(['running', 'completed', 'failed', 'cancelled']),
+  "triggerType": zod.enum(['schedule', 'manual', 'range']),
   "awardsFound": zod.number(),
   "candidatesChecked": zod.number(),
   "matchesFound": zod.number(),
@@ -211,8 +211,29 @@ export const GetScanParams = zod.object({
 export const GetScanResponse = zod.object({
   "id": zod.number(),
   "targetDates": zod.array(zod.string()),
-  "status": zod.enum(['running', 'completed', 'failed']),
-  "triggerType": zod.enum(['schedule', 'manual']),
+  "status": zod.enum(['running', 'completed', 'failed', 'cancelled']),
+  "triggerType": zod.enum(['schedule', 'manual', 'range']),
+  "awardsFound": zod.number(),
+  "candidatesChecked": zod.number(),
+  "matchesFound": zod.number(),
+  "errorMessage": zod.string().nullish(),
+  "startedAt": zod.string(),
+  "finishedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Stop a running scan
+ */
+export const CancelScanParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CancelScanResponse = zod.object({
+  "id": zod.number(),
+  "targetDates": zod.array(zod.string()),
+  "status": zod.enum(['running', 'completed', 'failed', 'cancelled']),
+  "triggerType": zod.enum(['schedule', 'manual', 'range']),
   "awardsFound": zod.number(),
   "candidatesChecked": zod.number(),
   "matchesFound": zod.number(),
@@ -237,8 +258,8 @@ export const TriggerScanBody = zod.object({
 export const TriggerScanResponse = zod.object({
   "id": zod.number(),
   "targetDates": zod.array(zod.string()),
-  "status": zod.enum(['running', 'completed', 'failed']),
-  "triggerType": zod.enum(['schedule', 'manual']),
+  "status": zod.enum(['running', 'completed', 'failed', 'cancelled']),
+  "triggerType": zod.enum(['schedule', 'manual', 'range']),
   "awardsFound": zod.number(),
   "candidatesChecked": zod.number(),
   "matchesFound": zod.number(),

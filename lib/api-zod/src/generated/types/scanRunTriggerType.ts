@@ -12,4 +12,5 @@ export type ScanRunTriggerType = typeof ScanRunTriggerType[keyof typeof ScanRunT
 export const ScanRunTriggerType = {
   schedule: 'schedule',
   manual: 'manual',
+  range: 'range',
 } as const;

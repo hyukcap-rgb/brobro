@@ -917,6 +917,77 @@ export function useGetScan<TData = Awaited<ReturnType<typeof getScan>>, TError =
 
 
 
+export const getCancelScanUrl = (id: number,) => {
+
+
+
+
+  return `/api/scans/${id}/cancel`
+}
+
+/**
+ * @summary Stop a running scan
+ */
+export const cancelScan = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<ScanRun> => {
+
+  return customFetch<ScanRun>(getCancelScanUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getCancelScanMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelScan>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof cancelScan>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['cancelScan'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cancelScan>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  cancelScan(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CancelScanMutationResult = NonNullable<Awaited<ReturnType<typeof cancelScan>>>
+
+    export type CancelScanMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Stop a running scan
+ */
+export const useCancelScan = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelScan>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof cancelScan>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getCancelScanMutationOptions(options));
+    }
+
 export const getTriggerScanUrl = () => {
 
 

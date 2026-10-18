@@ -1,7 +1,13 @@
 import { Router, type IRouter } from "express";
 import { GetScanParams, ListScansQueryParams, TriggerScanBody } from "@workspace/api-zod";
 import { deleteAllScanData, getScanRun, listScanRuns } from "../lib/matches-store";
-import { createPendingScanRun, executeScanRun, ScanAlreadyRunningError } from "../lib/daily-scan";
+import {
+  cancelScanRun,
+  createPendingScanRun,
+  executeScanRun,
+  getRunningScanRun,
+  ScanAlreadyRunningError,
+} from "../lib/daily-scan";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -104,12 +110,48 @@ router.post("/scans/run", async (req, res) => {
     if (error instanceof ScanAlreadyRunningError) {
       // 요구사항(2026-09-11): 동시 실행을 API 호출 낭비 없이 막았다는 신호이지
       // 서버 오류가 아니므로 500이 아닌 409(Conflict)로 명확히 구분한다.
-      res.status(409).json({ error: "이미 다른 스캔이 진행 중입니다. 완료된 후 다시 시도해 주세요." });
+      // 요구사항(2026-10-18 사용자 리포트: "7/23~24로 설정하고 검색을 눌렀는데
+      // 10/17 검색이 검색중으로 나와"): 어떤 검색 때문에 막혔는지 알 수 있도록
+      // 진행 중인 실행의 대상일을 함께 알려준다(화면에서 "중지" 후 재시도 가능).
+      const running = await getRunningScanRun(req.session.userId!).catch(() => null);
+      const label = running ? formatDatesLabel(running.targetDates) : null;
+      res.status(409).json({
+        error: label
+          ? `이미 다른 검색(대상일 ${label})이 진행 중입니다. 실행 기록에서 "중지"를 누른 뒤 다시 검색해 주세요.`
+          : "이미 다른 검색이 진행 중입니다. 완료되거나 중지한 뒤 다시 시도해 주세요.",
+        runningScanId: running?.id ?? null,
+      });
       return;
     }
     logger.error({ err: error }, "Could not start manual scan");
     res.status(500).json({ error: error instanceof Error ? error.message : "스캔을 시작하지 못했습니다." });
   }
+});
+
+function formatDatesLabel(dates: string[]): string {
+  if (dates.length === 0) return "-";
+  const sorted = [...dates].sort();
+  const fmt = (key: string) => {
+    const [, m, d] = key.split("-").map(Number);
+    return `${m}/${d}`;
+  };
+  return sorted.length === 1 ? fmt(sorted[0]) : `${fmt(sorted[0])}~${fmt(sorted[sorted.length - 1])}`;
+}
+
+// 요구사항(2026-10-18 사용자 요청: "지금 돌고있는 검색을 중지 시킬 수 있는 중지
+// 버튼도 필요함"): 진행 중인 실행을 중지한다. 이미 끝난 실행이면 409.
+router.post("/scans/:id/cancel", async (req, res) => {
+  const params = GetScanParams.safeParse(req.params);
+  if (!params.success) {
+    res.status(404).json({ error: "실행 기록을 찾을 수 없습니다." });
+    return;
+  }
+  const cancelled = await cancelScanRun(req.session.userId!, params.data.id);
+  if (!cancelled) {
+    res.status(409).json({ error: "이미 끝났거나 진행 중이 아닌 검색입니다." });
+    return;
+  }
+  res.json(serializeRun(cancelled));
 });
 
 export default router;

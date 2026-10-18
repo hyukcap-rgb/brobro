@@ -16,8 +16,8 @@ export const dailyScanRunsTable = pgTable("daily_scan_runs", {
     .notNull()
     .references(() => adminUsersTable.id, { onDelete: "cascade" }),
   targetDates: jsonb("target_dates").$type<string[]>().notNull(),
-  status: text("status", { enum: ["running", "completed", "failed"] }).notNull().default("running"),
-  triggerType: text("trigger_type", { enum: ["schedule", "manual"] }).notNull().default("schedule"),
+  status: text("status", { enum: ["running", "completed", "failed", "cancelled"] }).notNull().default("running"),
+  triggerType: text("trigger_type", { enum: ["schedule", "manual", "range"] }).notNull().default("schedule"),
   awardsFound: integer("awards_found").notNull().default(0),
   candidatesChecked: integer("candidates_checked").notNull().default(0),
   matchesFound: integer("matches_found").notNull().default(0),

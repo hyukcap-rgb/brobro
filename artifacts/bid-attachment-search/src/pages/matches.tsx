@@ -3,6 +3,7 @@ import {
   useListMatches,
   useListScans,
   useTriggerScan,
+  useCancelScan,
   getListMatchesQueryKey,
   getListScansQueryKey,
   getExportMatchesXlsxUrl,
@@ -19,7 +20,7 @@ import {
   Download, Loader2, PlayCircle, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock,
   MapPin, Phone, CalendarSearch, Search, Paperclip, X, ListFilter, Package, Info,
   ChevronDown, ChevronRight, ChevronLeft, ArrowUp, ArrowDown, ArrowUpDown,
-  Copy, Check,
+  Copy, Check, Square, Ban,
 } from "lucide-react";
 
 // KST(Asia/Seoul) 기준 "어제" 날짜를 YYYY-MM-DD로 반환한다. 서버의 자동 검색과
@@ -203,6 +204,13 @@ function scanStatusBadge(scan: { status: string; errorMessage?: string | null })
       </Badge>
     );
   }
+  if (scan.status === "cancelled") {
+    return (
+      <Badge variant="outline" className="gap-1 text-muted-foreground">
+        <Ban className="h-3 w-3" /> 중지됨
+      </Badge>
+    );
+  }
   if (scan.status === "failed") {
     return (
       <Badge variant="outline" className="gap-1 text-destructive border-destructive/40">
@@ -215,6 +223,21 @@ function scanStatusBadge(scan: { status: string; errorMessage?: string | null })
       <Clock className="h-3 w-3" /> 진행중
     </Badge>
   );
+}
+
+// 요구사항(2026-10-18 사용자 리포트: "7/23~24로 설정하고 검색을 눌렀는데 10/17
+// 검색이 검색중으로 나와"): 실제로는 "지금 실행"(어제 낙찰분) 실행이었는데,
+// 실행 기록에 어떤 버튼으로 시작된 검색인지 표시가 없어 기간 검색이 날짜를
+// 잘못 잡은 것처럼 보였다. 실행 기록에 "구분"을 함께 보여준다.
+function scanTriggerLabel(triggerType: string): string {
+  if (triggerType === "schedule") return "자동(07시)";
+  if (triggerType === "range") return "기간 지정";
+  return "지금 실행";
+}
+
+function errorMessageFrom(error: unknown, fallback: string): string {
+  const data = (error as { data?: { error?: unknown } } | null)?.data;
+  return typeof data?.error === "string" && data.error ? data.error : fallback;
 }
 
 export default function Matches() {
@@ -252,6 +275,7 @@ export default function Matches() {
     },
   );
   const triggerScan = useTriggerScan();
+  const cancelScan = useCancelScan();
 
   const matches = matchesQuery.data?.matches ?? [];
   const scans = scansQuery.data?.scans ?? [];
@@ -460,16 +484,46 @@ export default function Matches() {
             setJustTriggered(false);
           }, 20_000);
         },
-        onError: () => {
+        onError: (error) => {
           toast({
-            title: "실행에 실패했습니다",
-            description: "잠시 후 다시 시도해 주세요.",
+            title: "검색을 시작하지 못했습니다",
+            description: errorMessageFrom(error, "잠시 후 다시 시도해 주세요."),
             variant: "destructive",
           });
+          void queryClient.invalidateQueries({ queryKey: getListScansQueryKey() });
         },
       },
     );
   };
+
+  // 요구사항(2026-10-18 사용자 요청: "지금 돌고있는 검색을 중지 시킬 수 있는
+  // 중지 버튼도 필요함")
+  const [cancellingScanId, setCancellingScanId] = useState<number | null>(null);
+  const handleCancelScan = (id: number) => {
+    setCancellingScanId(id);
+    cancelScan.mutate(
+      { id },
+      {
+        onSuccess: () => {
+          toast({ title: "검색을 중지했습니다", description: "이제 다른 검색을 바로 시작할 수 있습니다." });
+          setJustTriggered(false);
+        },
+        onError: (error) => {
+          toast({
+            title: "중지하지 못했습니다",
+            description: errorMessageFrom(error, "이미 끝난 검색일 수 있습니다."),
+            variant: "destructive",
+          });
+        },
+        onSettled: () => {
+          setCancellingScanId(null);
+          void queryClient.invalidateQueries({ queryKey: getListScansQueryKey() });
+          void queryClient.invalidateQueries({ queryKey: getListMatchesQueryKey({ limit: 500 }) });
+        },
+      },
+    );
+  };
+  const runningScan = scans.find((scan) => scan.status === "running") ?? null;
 
   const rangeInvalid = !startDate || !endDate || endDate < startDate;
 
@@ -970,7 +1024,7 @@ export default function Matches() {
             ) : (
               <PlayCircle className="h-4 w-4" />
             )}
-            {justTriggered ? "실행 중..." : "지금 실행"}
+            {justTriggered ? "실행 중..." : "어제 낙찰분 지금 실행"}
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -989,10 +1043,34 @@ export default function Matches() {
           조회한 뒤 실제 낙찰일이 지정 기간에 해당하고 낙찰자가 확정된 공고만
           남겨서 돌려준다(daily-scan.ts executeScanRun 참고). "지금 실행"과
           동일한 기준(낙찰일)을 공유한다. */}
+          {runningScan ? (
+            <div className="flex items-center justify-between gap-3 flex-wrap rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                진행 중인 검색: 대상일 <b>{formatTargetDates(runningScan.targetDates)}</b>
+                <span className="text-muted-foreground">({scanTriggerLabel(runningScan.triggerType)})</span>
+                <span className="text-muted-foreground">— 끝나거나 중지해야 다른 검색을 시작할 수 있습니다.</span>
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleCancelScan(runningScan.id)}
+                disabled={cancellingScanId === runningScan.id}
+                className="text-destructive border-destructive/40 hover:bg-destructive/10"
+              >
+                {cancellingScanId === runningScan.id ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Square className="h-4 w-4" />
+                )}
+                중지
+              </Button>
+            </div>
+          ) : null}
           <div className="rounded-md border bg-muted/30 p-3 space-y-2">
             <div className="text-sm font-medium">기간 지정 재검색 (낙찰일 기준, 최종낙찰자만)</div>
             <p className="text-xs text-muted-foreground">
-              위 "지금 실행"과 별개로, 지정한 기간에 낙찰(최종낙찰자 확정)된 공고만 검색합니다(시작일=종료일이면
+              위 "어제 낙찰분 지금 실행"과 별개로, 지정한 기간에 낙찰(최종낙찰자 확정)된 공고만 검색합니다(시작일=종료일이면
               하루만 검색. 아직 낙찰자가 확정되지 않은 건은 결과에서 제외됩니다).
             </p>
             <div className="flex items-center gap-2 flex-wrap">
@@ -1039,6 +1117,7 @@ export default function Matches() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>상태</TableHead>
+                    <TableHead>구분</TableHead>
                     <TableHead>대상일</TableHead>
                     <TableHead>낙찰 건수</TableHead>
                     <TableHead>
@@ -1074,7 +1153,29 @@ export default function Matches() {
                     const isSelected = selectedScanRunIds.has(scan.id);
                     return (
                     <TableRow key={scan.id} className={isSelected ? "bg-primary/10" : undefined}>
-                      <TableCell>{scanStatusBadge(scan)}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          {scanStatusBadge(scan)}
+                          {scan.status === "running" ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-destructive hover:bg-destructive/10"
+                              onClick={() => handleCancelScan(scan.id)}
+                              disabled={cancellingScanId === scan.id}
+                              title="이 검색 중지"
+                            >
+                              {cancellingScanId === scan.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Square className="h-3 w-3" />
+                              )}
+                              중지
+                            </Button>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">{scanTriggerLabel(scan.triggerType)}</TableCell>
                       <TableCell className="text-xs">{formatTargetDates(scan.targetDates)}</TableCell>
                       <TableCell>{scan.awardsFound}</TableCell>
                       <TableCell>{scan.candidatesChecked}</TableCell>
@@ -1106,7 +1207,9 @@ export default function Matches() {
                       <TableCell className="text-xs whitespace-nowrap">{formatDateTime(scan.startedAt)}</TableCell>
                       <TableCell className="max-w-xs text-xs">
                         {scan.errorMessage ? (
-                          <span className="text-destructive">{scan.errorMessage}</span>
+                          <span className={scan.status === "cancelled" ? "text-muted-foreground" : "text-destructive"}>
+                            {scan.errorMessage}
+                          </span>
                         ) : scan.candidatesChecked < scan.awardsFound ? (
                           <span className="text-muted-foreground">
                             {scan.awardsFound - scan.candidatesChecked}건은 최소 공사 규모 미달로 상세 조회를

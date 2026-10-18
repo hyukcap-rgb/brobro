@@ -458,6 +458,7 @@ export const ScanRunStatus = {
   running: 'running',
   completed: 'completed',
   failed: 'failed',
+  cancelled: 'cancelled',
 } as const;
 
 export type ScanRunTriggerType = typeof ScanRunTriggerType[keyof typeof ScanRunTriggerType];
@@ -466,6 +467,7 @@ export type ScanRunTriggerType = typeof ScanRunTriggerType[keyof typeof ScanRunT
 export const ScanRunTriggerType = {
   schedule: 'schedule',
   manual: 'manual',
+  range: 'range',
 } as const;
 
 export interface ScanRun {
