@@ -81,6 +81,23 @@ export async function listAwardedMatchesForRun(scanRunId: number): Promise<Award
     .orderBy(desc(awardedMatchesTable.createdAt));
 }
 
+// 요구사항(2026-10-19 사용자 요청: "상태 중 실패한 건들은 모두 리스트에서 삭제해줘"):
+// 실행 기록 중 "실패"만 지운다. 실패한 실행 중에 저장된 매칭(리드)은 그대로 두고
+// 실행 기록과의 연결만 끊는다(scan_run_id 외래키).
+export async function deleteFailedScanRuns(adminUserId: number): Promise<{ deletedRuns: number }> {
+  return db.transaction(async (tx) => {
+    const failed = await tx
+      .select({ id: dailyScanRunsTable.id })
+      .from(dailyScanRunsTable)
+      .where(and(eq(dailyScanRunsTable.adminUserId, adminUserId), eq(dailyScanRunsTable.status, "failed")));
+    const ids = failed.map((row) => row.id);
+    if (ids.length === 0) return { deletedRuns: 0 };
+    await tx.update(awardedMatchesTable).set({ scanRunId: null }).where(inArray(awardedMatchesTable.scanRunId, ids));
+    await tx.delete(dailyScanRunsTable).where(inArray(dailyScanRunsTable.id, ids));
+    return { deletedRuns: ids.length };
+  });
+}
+
 // 요구사항(2026-09-10 사용자 요청: "우선 지금 test로 되어있는 결과값들은 모두
 // 삭제해줘"): 배포 확인차 수동으로 돌려본 스캔 실행 기록과 그로 인해 저장된
 // 매칭 결과를 한 번에 정리하기 위한 전체 삭제. 실제 운영 데이터가 쌓이기 전,

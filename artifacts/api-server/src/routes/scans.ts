@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { GetScanParams, ListScansQueryParams, TriggerScanBody } from "@workspace/api-zod";
-import { deleteAllScanData, getScanRun, listScanRuns } from "../lib/matches-store";
+import { deleteAllScanData, deleteFailedScanRuns, getScanRun, listScanRuns } from "../lib/matches-store";
 import {
   cancelScanRun,
   createPendingScanRun,
@@ -38,6 +38,12 @@ router.get("/scans", async (req, res) => {
 // 때 직접 호출한다.
 router.delete("/scans", async (req, res) => {
   const result = await deleteAllScanData(req.session.userId!);
+  res.json(result);
+});
+
+// 실행 기록 중 실패한 것만 지운다(화면의 "실패 기록 삭제" 버튼).
+router.delete("/scans/failed", async (req, res) => {
+  const result = await deleteFailedScanRuns(req.session.userId!);
   res.json(result);
 });
 

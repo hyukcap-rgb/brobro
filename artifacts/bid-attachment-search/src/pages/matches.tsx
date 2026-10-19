@@ -525,6 +525,29 @@ export default function Matches() {
   };
   const runningScan = scans.find((scan) => scan.status === "running") ?? null;
 
+  // 요구사항(2026-10-19 사용자 요청: "상태 중 실패한 건들은 모두 리스트에서 삭제해줘")
+  const [deletingFailed, setDeletingFailed] = useState(false);
+  const hasFailedOnPage = scans.some((scan) => scan.status === "failed");
+  const handleDeleteFailedScans = async () => {
+    setDeletingFailed(true);
+    try {
+      const response = await fetch("/api/scans/failed", { method: "DELETE", credentials: "include" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const { deletedRuns } = (await response.json()) as { deletedRuns: number };
+      toast({ title: `실패 기록 ${deletedRuns}건을 삭제했습니다` });
+      setScanPage(0);
+    } catch {
+      toast({
+        title: "실패 기록을 삭제하지 못했습니다",
+        description: "잠시 후 다시 시도해 주세요.",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingFailed(false);
+      void queryClient.invalidateQueries({ queryKey: getListScansQueryKey() });
+    }
+  };
+
   const rangeInvalid = !startDate || !endDate || endDate < startDate;
 
   // 요구사항(2026-09-11 사용자 재지적: "모든 검색의 기준은 낙찰일이야"): "지금
@@ -1121,6 +1144,19 @@ export default function Matches() {
               </div>
             ) : null}
           </div>
+          {hasFailedOnPage ? (
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleDeleteFailedScans()}
+                disabled={deletingFailed}
+              >
+                {deletingFailed ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+                실패 기록 삭제
+              </Button>
+            </div>
+          ) : null}
           {scans.length === 0 ? (
             <div className="text-sm text-muted-foreground py-4 text-center">실행 기록이 없습니다.</div>
           ) : (
