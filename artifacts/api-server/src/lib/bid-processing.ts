@@ -1198,7 +1198,8 @@ async function findBusinessContactInAttachments(
   for (const filePath of files) {
     try {
       const segments = await extractSegments(filePath);
-      const text = segments.map((segment) => segment.itemContext ?? segment.text).join("\n");
+      // 같은 행의 셀들은 같은 행 문맥을 공유하므로 중복을 빼고 합친다(넓은 엑셀 행에서 폭증 방지).
+      const text = [...new Set(segments.map((segment) => segment.itemContext ?? segment.text))].join("\n");
       const found = extractBusinessContactFromText(text, companyName);
       if (found.address || found.phone) return found;
     } catch {

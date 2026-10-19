@@ -21,6 +21,20 @@ import { logger } from "./logger";
 export const EXTRACT_TIMEOUT_MS = Number(process.env.EXTRACT_TIMEOUT_MS) || 120_000;
 const SLOW_EXTRACT_LOG_MS = 15_000;
 const WORKER_MAX_OLD_GEN_MB = Number(process.env.EXTRACT_WORKER_MAX_OLD_GEN_MB) || 1024;
+// 파일 하나에서 메인 스레드로 넘길 추출 결과 상한(extract-worker.ts capSegments 주석 참고).
+// 기본 2,000만 자(행 문맥은 중복 없이 1회만 셈) — 일반 공고 첨부는 수십만 자 이내라 영향 없음.
+const MAX_TEXT_CHARS = Number(process.env.EXTRACT_MAX_TEXT_CHARS) || 20_000_000;
+const MAX_SEGMENTS = Number(process.env.EXTRACT_MAX_SEGMENTS) || 500_000;
+
+type WorkerMessage = {
+  ok: boolean;
+  segments?: (Omit<ExtractedSegment, "itemContext"> & { ctx?: number })[];
+  contexts?: string[];
+  truncated?: boolean;
+  originalSegments?: number;
+  originalChars?: number;
+  message?: string;
+};
 
 // 빌드 산출물은 dist/index.mjs 옆에 dist/extract-worker.mjs로 나온다(build.mjs).
 const WORKER_PATH = path.resolve(import.meta.dirname, "extract-worker.mjs");
@@ -37,7 +51,7 @@ function runInWorker(filePath: string, timeoutMs: number): Promise<ExtractedSegm
     // 워커 힙 상한: 비정상 파일이 메모리를 폭주시켜도 워커만 죽고(ERR_WORKER_OUT_OF_MEMORY)
     // 웹 서버 프로세스 전체는 살아남게 한다.
     const worker = new Worker(WORKER_PATH, {
-      workerData: { filePath },
+      workerData: { filePath, maxTextChars: MAX_TEXT_CHARS, maxSegments: MAX_SEGMENTS },
       resourceLimits: { maxOldGenerationSizeMb: WORKER_MAX_OLD_GEN_MB },
     });
     let settled = false;
@@ -51,10 +65,29 @@ function runInWorker(filePath: string, timeoutMs: number): Promise<ExtractedSegm
     const timer = setTimeout(() => {
       finish(() => reject(new ExtractTimeoutError(path.basename(filePath), timeoutMs)));
     }, timeoutMs);
-    worker.once("message", (message: { ok: boolean; segments?: ExtractedSegment[]; message?: string }) => {
-      finish(() =>
-        message.ok ? resolve(message.segments ?? []) : reject(new Error(message.message ?? "추출 실패")),
-      );
+    worker.once("message", (message: WorkerMessage) => {
+      finish(() => {
+        if (!message.ok) return reject(new Error(message.message ?? "추출 실패"));
+        // 행 문맥은 한 번만 넘어오므로 같은 행의 셀들이 같은 문자열을 공유하게 다시 붙인다.
+        const contexts = message.contexts ?? [];
+        const segments: ExtractedSegment[] = (message.segments ?? []).map(({ ctx, ...rest }) =>
+          ctx === undefined ? rest : { ...rest, itemContext: contexts[ctx] },
+        );
+        if (message.truncated) {
+          logger.warn(
+            {
+              fileName: path.basename(filePath),
+              originalSegments: message.originalSegments,
+              originalChars: message.originalChars,
+              keptSegments: segments.length,
+              maxTextChars: MAX_TEXT_CHARS,
+              maxSegments: MAX_SEGMENTS,
+            },
+            "첨부파일 추출 결과가 너무 커서 앞부분만 사용 — 서버 메모리 보호",
+          );
+        }
+        resolve(segments);
+      });
     });
     worker.once("error", (error) => finish(() => reject(error)));
     worker.once("exit", (code) => {

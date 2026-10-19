@@ -17,6 +17,9 @@ const execFileAsync = promisify(execFile);
 // 끝나지 않는 경우를 막는 상한. 시간을 넘기면 SIGKILL로 강제 종료된다.
 export const COMMAND_TIMEOUT_MS = 60_000;
 
+// 엑셀 한 행의 문맥(itemContext) 최대 길이 — extractXlsx 주석 참고.
+const MAX_ITEM_CONTEXT_CHARS = 4_000;
+
 export interface ExtractedSegment {
   text: string;
   itemContext?: string;
@@ -216,7 +219,13 @@ async function extractXlsx(filePath: string): Promise<ExtractedSegment[]> {
         }
         if (text) cells.push({ address, text });
       }
-      const itemContext = cells.map((cell) => `${cell.address}=${cell.text}`).join(" | ");
+      // 장애 대응(2026-10-19): 행 문맥(itemContext)은 그 행의 셀마다 같은 문자열을
+      // 붙이는데, 워커→메인으로 넘길 때 셀 개수만큼 복사된다. 칸이 수백~수천 개
+      // 채워진 넓은 행이면 (행 길이 × 셀 수)로 불어나 메인 힙 4GB를 넘겨 서버가
+      // 죽었다. 행 문맥은 표시·주변 글 용도라 앞부분이면 충분하므로 길이를 자른다.
+      const fullContext = cells.map((cell) => `${cell.address}=${cell.text}`).join(" | ");
+      const itemContext =
+        fullContext.length > MAX_ITEM_CONTEXT_CHARS ? fullContext.slice(0, MAX_ITEM_CONTEXT_CHARS) : fullContext;
       for (const cell of cells) {
         segments.push({
           text: cell.text,
