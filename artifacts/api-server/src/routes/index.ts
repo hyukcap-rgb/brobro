@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
+import quotaRouter from "./quota";
 import authRouter from "./auth";
 import bidsRouter from "./bids";
 import settingsRouter from "./settings";
@@ -12,6 +13,8 @@ const router: IRouter = Router();
 // 공개: 헬스체크 + 로그인 관련 엔드포인트 (로그인 여부를 확인해야 하니 /auth/me도 공개).
 router.use(healthRouter);
 router.use(authRouter);
+// 공개(토큰 보호): narafile이 읽는 API 호출량/일일 검색 완료 여부.
+router.use(quotaRouter);
 
 // 이 아래는 전부 로그인 필요.
 router.use(requireAuth);

@@ -5,6 +5,7 @@ import { runAttachmentCleanup } from "./attachment-cleanup";
 import { cleanupOldJobs } from "./bid-processing";
 import { logger } from "./logger";
 import { KST_TIME_ZONE } from "./kr-holidays";
+import { markDailyScanFinished, markDailyScanStarted } from "./api-quota";
 
 let started = false;
 let attachmentCleanupStarted = false;
@@ -18,6 +19,18 @@ let attachmentCleanupStarted = false;
 // Promise.all이 아니라 순서대로(한 계정씩 끝난 뒤 다음 계정) 실행한다 —
 // 한 계정의 실패/한도초과가 다른 계정의 실행 자체를 막지는 않는다.
 async function runDailyScanForAllAdmins(): Promise<void> {
+  // API 키 공유(2026-10-19): 일일 검색의 시작/끝을 남겨 narafile(2순위)이
+  // brog2b가 끝난 뒤에만 남은 호출량을 쓰도록 한다. 계정 모두를 돈 뒤에
+  // 끝났다고 표시하며, 한 계정이 실패해도 finally에서 표시한다.
+  await markDailyScanStarted().catch((error) => logger.warn({ err: error }, "일일 검색 시작 표시 실패(무시)"));
+  try {
+    await runDailyScanForAllAdminsInner();
+  } finally {
+    await markDailyScanFinished().catch((error) => logger.warn({ err: error }, "일일 검색 완료 표시 실패(무시)"));
+  }
+}
+
+async function runDailyScanForAllAdminsInner(): Promise<void> {
   const admins = await db.select({ id: adminUsersTable.id, username: adminUsersTable.username }).from(adminUsersTable);
   for (const admin of admins) {
     logger.info({ username: admin.username }, "일별 낙찰 공고 스캔 시작 (스케줄)");

@@ -23,6 +23,7 @@ import { eq } from "drizzle-orm";
 import { db, businessContactCacheTable, govCorpCacheTable } from "@workspace/db";
 import { logger } from "./logger";
 import { kstToday } from "./kr-holidays";
+import { recordDataGoKrCall } from "./api-quota";
 import {
   command,
   decodeXml,
@@ -577,6 +578,8 @@ export async function requestBuffer(url: string, timeoutMs = 45_000, redirects =
   body: Buffer;
 }> {
   assertCircuitAvailable();
+  // 공용 서비스키 호출량 집계(2026-10-19): 첫 요청만 센다(리다이렉트는 제외).
+  if (redirects === 0) recordDataGoKrCall(url);
   try {
     const response = await new Promise<{
       status: number;

@@ -2,6 +2,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureAdminSeeded, ensureExtraAdminSeeded } from "./lib/auth";
 import { startDailyScanScheduler, startAttachmentCleanupScheduler } from "./lib/scheduler";
+import { ensureApiQuotaSchema } from "./lib/api-quota";
 import { recoverOrphanedScanRuns } from "./lib/daily-scan";
 import { clearStoredBidderAddresses } from "./lib/matches-store";
 import { sendTestEmail } from "./lib/mailer";
@@ -111,6 +112,7 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 ensureSchema()
+  .then(() => ensureApiQuotaSchema())
   .then(() => ensureAdminSeeded())
   .then(() => ensureExtraAdminSeeded())
   .then(() => recoverOrphanedScanRuns())
