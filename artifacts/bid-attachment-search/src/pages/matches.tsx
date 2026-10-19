@@ -693,7 +693,7 @@ export default function Matches() {
               Table 컴포넌트의 overflow-auto 컨테이너가 그때부터 실제로 좌우
               스크롤을 만들어주고, 각 컬럼은 지정한 폭 그대로 유지된다. */}
               <div className="rounded-md border">
-                <Table className="text-xs table-fixed w-[1535px]" containerClassName="max-h-[65vh]">
+                <Table className="text-xs table-fixed w-[1615px]" containerClassName="max-h-[65vh]">
                   <TableHeader className="sticky top-0 z-10 bg-background shadow-[0_1px_0_0_hsl(var(--border))]">
                     <TableRow>
                       <TableHead className="px-2 w-[140px]">공고번호</TableHead>
@@ -737,6 +737,9 @@ export default function Matches() {
                           규모 {sortIndicator("budgetAmount")}
                         </button>
                       </TableHead>
+                      {/* 요구사항(2026-10-19 사용자 요청: "공사 기간이 정해져 있는데
+                      검색리스트에 "일"로 표시해줘. 2개월 -> 60일 로 변환해서"). */}
+                      <TableHead className="px-2 w-[80px]">공사기간</TableHead>
                       {/* 요구사항(2026-09-13 사용자 요청: "낙찰받은 사람의 사무실과
                       실제 공사 현장을 모두 검색해서 결과에 보여줘"): 사업자 주소와
                       실제 공사현장 주소를 둘 다 보여준다 — 다만 현장 주소가
@@ -753,7 +756,7 @@ export default function Matches() {
                       return (
                         <Fragment key={dateKey}>
                           <TableRow className="bg-muted/40 hover:bg-muted/40">
-                            <TableCell colSpan={9} className="py-2 px-2">
+                            <TableCell colSpan={10} className="py-2 px-2">
                               <button
                                 type="button"
                                 onClick={() => toggleDateCollapsed(dateKey)}
@@ -858,6 +861,15 @@ export default function Matches() {
                           ) : null}
                           <span className="min-w-0 truncate">{formatAmount(match.awardAmount ?? match.budgetAmount)}</span>
                         </div>
+                      </TableCell>
+                      <TableCell className="px-2 whitespace-nowrap tabular-nums">
+                        {match.constructionDays != null ? (
+                          <span title={match.constructionPeriodText ? `원문: ${match.constructionPeriodText}` : undefined}>
+                            {match.constructionDays.toLocaleString("ko-KR")}일
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
                       </TableCell>
                       {/* 요구사항(2026-09-13 사용자 요청: "낙찰받은 사람의 사무실과
                       실제 공사 현장을 모두 검색해서 결과에 보여줘"): 사업자 주소

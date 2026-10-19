@@ -7,6 +7,7 @@ import { clearStoredBidderAddresses } from "./lib/matches-store";
 import { sendTestEmail } from "./lib/mailer";
 import { requestBuffer, formatServiceKey, compactDate } from "./lib/bid-processing";
 import { ensureSchema } from "@workspace/db";
+import { startConstructionPeriodBackfill } from "./lib/construction-period-backfill";
 
 // 요구사항(2026-09-14 사용자 요청: "테스트 메일 보내줘"): SEND_TEST_EMAIL_TO가
 // 설정되어 있으면 기동 시 1회 테스트 메일을 보낸다. 평소에는 이 환경변수가
@@ -119,6 +120,7 @@ ensureSchema()
   })
   .then(() => startDailyScanScheduler())
   .then(() => startAttachmentCleanupScheduler())
+  .then(() => startConstructionPeriodBackfill())
   .then(() => maybeSendTestEmail())
   .then(() => maybeRunLhApiTest())
   .catch((err: unknown) => {

@@ -32,6 +32,7 @@ import { SCAN_ROOT, resolveMatchAttachmentPath } from "./scan-storage";
 import { buildMatchesXlsx, groupMatchesByNotice, listAwardedMatchesForRun } from "./matches-store";
 import { sendScanResultEmail, type ScanResultEmailAttachment } from "./mailer";
 import { logger } from "./logger";
+import { extractConstructionPeriod, extractConstructionPeriodFromDetail } from "./construction-period";
 
 // 요구사항(2026-09-28 사용자 요청: "이메일로 보내는것도 수량기준으로 정렬해서
 // 보내줘"): matches.tsx 화면의 기본 정렬을 수량 내림차순으로 바꾼 것과 같은
@@ -1213,8 +1214,17 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               extractSiteAddress(allAttachmentText) ??
               extractGeneralAddress(allAttachmentText) ??
               (String(detail.cnstrtsiteRgnNm ?? "").trim() || null);
+            // 요구사항(2026-10-19 사용자 요청: "공사 기간이 정해져 있는데 검색리스트에
+            // "일"로 표시해줘. 2개월 -> 60일 로 변환해서"): 현장주소와 같은 방식으로
+            // 이 공고의 첨부파일 전체 텍스트에서 공사기간을 찾아 일 단위로 환산한다.
+            const period =
+              extractConstructionPeriodFromDetail(detail) ??
+              extractConstructionPeriod(allAttachmentText) ??
+              extractConstructionPeriod(String(detail.bidNtceNm ?? ""));
             for (const row of finalInserts) {
               row.values.siteAddress = resolvedSiteAddress;
+              row.values.constructionDays = period?.days ?? null;
+              row.values.constructionPeriodText = period?.text ?? "";
             }
 
             for (const row of finalInserts) {
@@ -1246,6 +1256,9 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               { text: String(detail.bidNtceNm ?? ""), sheet: null, page: null, location: "공고명" },
             ];
             const secondaryMatches = searchSegments(secondaryTitleSegments, settings.secondaryKeywords);
+            const secondaryPeriod =
+              extractConstructionPeriodFromDetail(detail) ??
+              extractConstructionPeriod(String(detail.bidNtceNm ?? ""));
             for (const match of secondaryMatches) {
               const actualKeywords = match.foundKeywords.join(", ");
               const secondaryBudgetAmount = Number(detail.bdgtAmt ?? 0) || Number(award.sucsfbidAmt ?? 0) || null;
@@ -1266,6 +1279,8 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                 awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
                 matchedKeyword: "사용자지정",
                 surroundingText: `사용자지정 키워드 매칭: ${actualKeywords}`,
+                constructionDays: secondaryPeriod?.days ?? null,
+                constructionPeriodText: secondaryPeriod?.text ?? "",
               };
 
               // 요구사항(2026-09-18 사용자 지적: "조건2번째로 검색된 이곳에서 같은곳이

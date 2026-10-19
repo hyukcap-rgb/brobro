@@ -209,7 +209,7 @@ const MATCH_HEADERS = [
   "공고번호", "현장명(공고명)", "발주기관", "업무구분", "공종", "낙찰자", "사업자등록번호",
   // 요구사항(2026-10-17 사용자 요청: "낙찰자 사업장 주소는 필요없어. 삭제해줘"):
   // "사업자 주소" 열을 뺐다. 현장 주소만 남긴다.
-  "현장 주소", "낙찰자 전화", "연락처 출처", "현장사무소", "부직포 수량",
+  "현장 주소", "공사기간(일)", "낙찰자 전화", "연락처 출처", "현장사무소", "부직포 수량",
   "추정가격", "예산금액", "낙찰금액", "낙찰일", "매칭 키워드", "첨부파일명", "확인시각",
 ];
 
@@ -231,6 +231,7 @@ function matchRow(match: AwardedMatch, keywordCount = 1): string[] {
     match.bidderName ?? "",
     match.bidderBizno ?? "",
     match.siteAddress ?? "",
+    match.constructionDays != null ? String(match.constructionDays) : "",
     match.bidderPhone ?? "",
     (match.contactSource && CONTACT_SOURCE_LABELS[match.contactSource]) ?? "",
     match.siteOffice ?? "",

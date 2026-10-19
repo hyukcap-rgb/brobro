@@ -128,6 +128,8 @@ export const ListMatchesResponse = zod.object({
   "source": zod.string().describe('이 매칭을 찾아낸 사이트(나라장터\/LH). siteName(현장명)과는 무관한 별도 축이다.'),
   "siteAddress": zod.string().nullish().describe('실제 공사가 이뤄지는 현장 주소(첨부파일에 명시된 값 우선, 없으면 나라장터 공사현장지역명). 낙찰자의 사업자 소재지(bidderAddress)와는 다르다.'),
   "workTypeName": zod.string().nullish(),
+  "constructionDays": zod.number().nullish().describe('첨부문서에 적힌 공사기간을 일 단위로 환산한 값(2개월 → 60일).'),
+  "constructionPeriodText": zod.string().nullish().describe('공사기간 환산의 근거가 된 원문 문구.'),
   "workCategory": zod.string().nullish().describe('이 공고를 찾아낸 업무구분(물품\/용역\/공사).'),
   "demandAgency": zod.string().nullish(),
   "bidderName": zod.string().nullish(),

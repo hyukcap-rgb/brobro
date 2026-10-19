@@ -390,6 +390,16 @@ export interface AwardedMatch {
   /** @nullable */
   workTypeName?: string | null;
   /**
+     * 첨부문서에 적힌 공사기간을 일 단위로 환산한 값(2개월 → 60일).
+     * @nullable
+     */
+  constructionDays?: number | null;
+  /**
+     * 공사기간 환산의 근거가 된 원문 문구.
+     * @nullable
+     */
+  constructionPeriodText?: string | null;
+  /**
      * 이 공고를 찾아낸 업무구분(물품/용역/공사).
      * @nullable
      */

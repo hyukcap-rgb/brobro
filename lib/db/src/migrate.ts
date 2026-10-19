@@ -193,6 +193,10 @@ export async function ensureSchema(): Promise<void> {
     -- 요구사항(2026-09-12: 화면 주소를 사업자주소 대신 실제 공사현장으로).
     ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS site_address TEXT;
 
+    -- 요구사항(2026-10-19: 공사기간을 "일" 단위로 표시).
+    ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS construction_days INTEGER;
+    ALTER TABLE awarded_matches ADD COLUMN IF NOT EXISTS construction_period_text TEXT;
+
     -- 요구사항(2026-09-19 사용자 재지적: "검색결과가 1000m2 이하인 것들도
     -- 많던데 내가 1000m2 이하는 검색하지 말라고 했잖아"): 위 유니크 인덱스가
     -- 첨부파일 단위로만 걸려 있어서, 같은 파일 안에서 "부직포"가 여러 줄에

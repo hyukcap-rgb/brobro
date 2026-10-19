@@ -908,6 +908,12 @@ components:
           description: 실제 공사가 이뤄지는 현장 주소(첨부파일에 명시된 값 우선, 없으면 나라장터 공사현장지역명). 낙찰자의 사업자 소재지(bidderAddress)와는 다르다.
         workTypeName:
           type: ["string", "null"]
+        constructionDays:
+          type: ["number", "null"]
+          description: 첨부문서에 적힌 공사기간을 일 단위로 환산한 값(2개월 → 60일).
+        constructionPeriodText:
+          type: ["string", "null"]
+          description: 공사기간 환산의 근거가 된 원문 문구.
         workCategory:
           type: ["string", "null"]
           description: 이 공고를 찾아낸 업무구분(물품/용역/공사).

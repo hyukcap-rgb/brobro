@@ -35,6 +35,11 @@ export const awardedMatchesTable = pgTable(
     // 실제 공사현장 위치(사업자 소재지인 bidderAddress와는 다름). daily-scan.ts 참고.
     siteAddress: text("site_address"),
     workTypeName: text("work_type_name"),
+    // 요구사항(2026-10-19 사용자 요청: "공사 기간이 정해져 있는데 검색리스트에
+    // "일"로 표시해줘. 2개월 -> 60일 로 변환해서"): 첨부문서에 적힌 공사기간을
+    // 일 단위로 환산한 값과, 근거가 된 원문 문구. construction-period.ts 참고.
+    constructionDays: integer("construction_days"),
+    constructionPeriodText: text("construction_period_text"),
     // 이 공고를 어떤 업무구분 API(물품/용역/공사)로 찾았는지.
     workCategory: text("work_category"),
     // 요구사항(2026-09-14 사용자 요청: "나라장터를 기본으로, 토지공사나 군대
