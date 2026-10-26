@@ -139,7 +139,51 @@ async function unzipText(
 // 담지 않으므로, xl/workbook.xml + xl/_rels/workbook.xml.rels를 함께 읽어
 // 실제 시트 이름을 구한다(덤으로 위치 표시도 "sheet16!D29" 대신
 // "재료비!D29"처럼 사람이 읽을 수 있게 개선된다).
-const EXCLUDED_REFERENCE_SHEET_PATTERN = /단가|재료비|유가정보|운반거리조견표/;
+//
+// 추가 사례(2026-10-26 사용자 리포트: "부직포 사이즈가 다 똑같은데 왜
+// 그런거야" — 전국 20개 지역 "주거환경개선공사" 낙찰 건이 전부 부직포
+// "3324 M2"로 동일하게 나옴): 이번엔 "일위대가"/"일위대가목록"이라는 숨김
+// 시트가 원인이었다. "일위대가"는 "이 공법(예: 도배(본드))을 쓰면 단위(M2)당
+// 단가가 얼마"라는 표준 단가 산출 근거표라서, 실제 이 공사의 물량과 무관하게
+// 전국 어디서나 같은 숫자가 나온다 — 실제로 확인해보니 이 공사는 부직포를
+// 아예 쓰지 않았다(공종별내역서의 실제 수량·금액 칸이 0). 시트 이름에
+// "일위대가"를 추가로 거른다.
+const EXCLUDED_REFERENCE_SHEET_PATTERN = /단가|재료비|유가정보|운반거리조견표|일위대가/;
+
+// 요구사항(2026-10-26, 위와 같은 리포트): 같은 파일의 "공종별내역서"라는
+// 시트(제목 셀이 스스로 "[ 원가 분석용 자료 ]"라고 밝히고 있다)는 이름만으로는
+// 위 패턴에 걸리지 않는다 — 적산 프로그램마다 이런 참고용 시트 이름이
+// 제각각이라(설계사무소/발주기관별로 템플릿이 다름) 이름 목록을 무한정 늘리는
+// 데는 한계가 있다. 그래서 이름 패턴과 별개로, 시트 맨 앞 몇 행에 "원가
+// 분석용 자료" 같은 자기선언 문구가 있으면(실제 제출용 물량내역서에는 이런
+// 문구가 없다) 시트 이름과 무관하게 그 시트 전체를 건너뛴다 — 더 일반적인
+// 안전장치다. 앞부분 몇 행만 보는 건 성능 때문(위 2026-10-13/19 장애 대응
+// 주석 참고 — 행마다 빈 셀이 수천~수만 개인 엑셀도 다뤄야 한다).
+const REFERENCE_ONLY_CONTENT_MARKER_PATTERN = /원가\s*분석용\s*자료/;
+const CONTENT_MARKER_SCAN_ROW_LIMIT = 5;
+
+function isReferenceOnlyContentSheet(
+  rowMatches: RegExpMatchArray[],
+  sharedStrings: string[],
+): boolean {
+  for (const row of rowMatches.slice(0, CONTENT_MARKER_SCAN_ROW_LIMIT)) {
+    if (row[1] === undefined) continue;
+    for (const cell of row[1].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      const body = cell[2];
+      if (body === undefined) continue;
+      const type = /\bt="([^"]+)"/.exec(cell[1])?.[1] ?? "";
+      let text = "";
+      if (type === "s") {
+        const index = Number(/<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? -1);
+        text = sharedStrings[index] ?? "";
+      } else if (type === "inlineStr") {
+        text = stripXml(body);
+      }
+      if (text && REFERENCE_ONLY_CONTENT_MARKER_PATTERN.test(text)) return true;
+    }
+  }
+  return false;
+}
 
 async function resolveSheetNames(archive: unzipper.CentralDirectory): Promise<Map<string, string>> {
   const map = new Map<string, string>();
@@ -192,7 +236,9 @@ async function extractXlsx(filePath: string): Promise<ExtractedSegment[]> {
     const xml = await unzipText(archive, sheetEntry);
     // 빈 행도 <row r="5" s="2" customFormat="1"/>처럼 자체 닫힘으로 나온다 —
     // 예전 패턴은 이걸 다음 행 내용과 한 행으로 묶어버렸다(아래 셀 패턴과 같은 원인).
-    for (const row of xml.matchAll(/<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g)) {
+    const rowMatches = [...xml.matchAll(/<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g)];
+    if (isReferenceOnlyContentSheet(rowMatches, sharedStrings)) continue;
+    for (const row of rowMatches) {
       if (row[1] === undefined) continue;
       const cells: { address: string; text: string }[] = [];
       // 장애 대응(2026-10-13): 예전 패턴 /<c\b([^>]*)>([\s\S]*?)<\/c>/ 는 빈 서식
