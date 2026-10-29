@@ -31,6 +31,7 @@ import {
   type ExtractedSegment,
 } from "./extract-core";
 import { ExtractTimeoutError, extractSegments } from "./extract-runner";
+import { normalizeForMatch } from "./keyword-text";
 
 export { command, extractSegments };
 export type { ExtractedSegment };
@@ -1740,16 +1741,25 @@ export function searchSegments(segments: ExtractedSegment[], keywords: readonly 
   // 세그먼트 루프 내내 동일하므로 미리 한 번만 소문자로 바꿔두고, 세그먼트
   // 텍스트도 세그먼트당 1회만 소문자로 바꿔 재사용한다. 포함 여부 판정(includes)
   // 결과와 foundKeywords에 담기는 값(원래 대소문자의 keyword)은 이전과 동일하다.
-  const lowerKeywords = keywords.map((keyword) => ({ keyword, lower: keyword.toLocaleLowerCase("ko-KR") }));
+  // 2026-10-29(narafile/brog2b-v2에서 먼저 적용한 개선을 이식): 공백·줄바꿈 차이
+  // ("수성 페인트" vs "수성\n페인트"), 보이지 않는 문자, 유니코드 정규화(NFC)
+  // 차이, 대소문자 차이에도 찾도록 키워드와 본문을 같은 방식(normalizeForMatch)으로
+  // 정리해 비교한다. 정리 후 빈 키워드는 모든 본문에 걸리므로 제외한다.
+  const lowerKeywords = keywords
+    .map((keyword) => ({ keyword, lower: normalizeForMatch(keyword).trim() }))
+    .filter(({ lower }) => lower.length > 0);
   for (const segment of segments) {
-    const lowerSegmentText = segment.text.toLocaleLowerCase("ko-KR");
-    const foundKeywords = lowerKeywords
-      .filter(({ lower }) => lowerSegmentText.includes(lower))
-      .map(({ keyword }) => keyword);
+    const lowerSegmentText = normalizeForMatch(segment.text);
+    const found = lowerKeywords.filter(({ lower }) => lowerSegmentText.includes(lower));
+    const foundKeywords = found.map(({ keyword }) => keyword);
     if (!foundKeywords.length) continue;
-    const firstIndex = Math.min(
-      ...foundKeywords.map((keyword) => segment.text.indexOf(keyword)).filter((index) => index >= 0),
-    );
+    // 위치는 원문 기준으로 찾는다(정리 과정에서 길이가 바뀔 수 있으므로 못 찾으면 0).
+    // 예전에는 원문에서 못 찾으면 Math.min()이 Infinity가 되어 주변 글이 빈 문자열이 됐다.
+    const lowerOriginal = segment.text.toLocaleLowerCase("ko-KR");
+    const positions = found
+      .map(({ keyword }) => lowerOriginal.indexOf(keyword.toLocaleLowerCase("ko-KR")))
+      .filter((index) => index >= 0);
+    const firstIndex = positions.length ? Math.min(...positions) : 0;
     matches.push({
       keywordFound: true,
       foundKeywords: [...foundKeywords],
