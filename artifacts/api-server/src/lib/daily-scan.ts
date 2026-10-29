@@ -1583,6 +1583,43 @@ export async function runDailyScan(
   return completed;
 }
 
+// 요구사항(2026-10-29 사용자 요청: "매일 보내는 첨부파일의 제목을 수정해서
+// 보낼 수 있어? 공고명_파일명으로"): 메일에 붙는 첨부파일 이름이 원본 파일명
+// ("내역서.xlsx", "설계서.pdf" 등)뿐이라 어느 공고 파일인지 알 수 없었다.
+// "공고명_원본파일명"으로 바꿔 보낸다(서버에 저장된 파일 자체는 그대로 두고
+// 메일 첨부 이름만 바꾼다). 윈도우/메일에서 파일명으로 쓸 수 없는 글자는
+// 공백으로 바꾸고, 공고명이 너무 길면 파일명 전체가 저장 한도(255자)를 넘지
+// 않도록 앞부분만 쓴다. 공고명이 없으면 원본 파일명 그대로 보낸다.
+const MAX_NOTICE_NAME_IN_ATTACHMENT = 80;
+
+function sanitizeAttachmentNamePart(value: string): string {
+  return value
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildEmailAttachmentFileName(noticeName: string | null | undefined, originalFileName: string): string {
+  const fileName = sanitizeAttachmentNamePart(originalFileName) || "첨부파일";
+  let notice = sanitizeAttachmentNamePart(noticeName ?? "");
+  if (!notice) return fileName;
+  if (notice.length > MAX_NOTICE_NAME_IN_ATTACHMENT) notice = notice.slice(0, MAX_NOTICE_NAME_IN_ATTACHMENT).trim();
+  return `${notice}_${fileName}`;
+}
+
+// 같은 이름이 두 번 나오면(예: 이름이 같은 공고의 같은 이름 첨부파일) 메일
+// 프로그램이 덮어쓰거나 헷갈리지 않도록 확장자 앞에 (2), (3)…을 붙인다.
+function uniqueAttachmentFileName(fileName: string, used: Set<string>): string {
+  let candidate = fileName;
+  if (used.has(candidate)) {
+    const extension = path.extname(fileName);
+    const stem = fileName.slice(0, fileName.length - extension.length);
+    for (let index = 2; used.has(candidate); index++) candidate = `${stem}(${index})${extension}`;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
 function formatDateLabel(dateKeys: string[]): string {
   if (dateKeys.length === 0) {
     const today = kstToday(new Date());
@@ -1616,12 +1653,17 @@ async function sendScheduleResultEmailIfNeeded(run: DailyScanRun): Promise<void>
     // 다시 첨부하지 않는다.
     const attachments: ScanResultEmailAttachment[] = [];
     const attachedStoredPaths = new Set<string>();
+    const usedAttachmentNames = new Set<string>();
     for (const match of matches) {
       if (match.attachmentDeletedAt || !match.attachmentStoredPath) continue;
       if (attachedStoredPaths.has(match.attachmentStoredPath)) continue;
       try {
         const filePath = await resolveMatchAttachmentPath(match.attachmentStoredPath);
-        attachments.push({ filename: match.attachmentFileName || path.basename(filePath), path: filePath });
+        const filename = uniqueAttachmentFileName(
+          buildEmailAttachmentFileName(match.noticeName, match.attachmentFileName || path.basename(filePath)),
+          usedAttachmentNames,
+        );
+        attachments.push({ filename, path: filePath });
         attachedStoredPaths.add(match.attachmentStoredPath);
       } catch (error) {
         logger.warn({ err: error, matchId: match.id }, "일일 검색결과 메일: 첨부파일 준비 실패 - 건너뜀");
