@@ -36,8 +36,16 @@ import { normalizeForMatch } from "./keyword-text";
 export { command, extractSegments };
 export type { ExtractedSegment };
 
-const API_BASE =
-  "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoCnstwk";
+// 2026-11-03 조달청 공지: 입찰공고정보서비스가 BidPublicInfoService02(오퍼레이션명
+// 끝에 "02")로 바뀌고 기존 URL은 90일 후 중단된다. 첨부파일(공고규격서URL1~10 등)은
+// 별도 오퍼레이션(getBidPblancListInfoAtchFileInfo02)으로 분리됐다.
+export const BID_PUBLIC_INFO_BASE = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService02";
+const API_BASE = `${BID_PUBLIC_INFO_BASE}/getBidPblancListInfoCnstwk02`;
+const ATCH_FILE_API = `${BID_PUBLIC_INFO_BASE}/getBidPblancListInfoAtchFileInfo02`;
+// 첨부파일 오퍼레이션 결과를 공고 상세(item)에 붙여두는 키. 상세 캐시(JSON)에도
+// 그대로 저장돼, 같은 공고를 다시 만나면 첨부파일 API를 다시 부르지 않는다.
+// 빈 배열 = "조회는 성공했고 첨부가 없음"(재조회 안 함), 키 없음 = "아직 조회 안 함".
+export const ATCH_FILES_KEY = "__atchFiles";
 // Prefer a mounted persistent volume when available (e.g. Railway's
 // RAILWAY_VOLUME_MOUNT_PATH) so job state and downloaded attachments survive
 // restarts/redeploys; fall back to the OS temp dir otherwise (e.g. local dev,
@@ -1509,7 +1517,7 @@ async function enrichKeywordResults(job: CollectionJob, awards: Map<string, Reco
   }
 }
 
-export function collectAttachments(item: Record<string, unknown>): { name: string; url: string }[] {
+function collectInlineAttachments(item: Record<string, unknown>): { name: string; url: string }[] {
   const attachments: { name: string; url: string }[] = [];
   for (let index = 1; index <= 10; index += 1) {
     const url = String(item[`ntceSpecDocUrl${index}`] ?? "").trim();
@@ -1517,6 +1525,91 @@ export function collectAttachments(item: Record<string, unknown>): { name: strin
     if (url) attachments.push({ url: decodeXml(url), name: name || `attachment-${index}` });
   }
   return attachments;
+}
+
+export function collectAttachments(item: Record<string, unknown>): { name: string; url: string }[] {
+  const inline = collectInlineAttachments(item);
+  if (inline.length > 0) return inline;
+  // 공고 상세 응답에서 첨부 필드가 빠진 경우(2026-11 조달청 오퍼레이션 분리 이후),
+  // ensureAttachmentList()가 첨부파일 오퍼레이션으로 받아 붙여둔 목록을 쓴다.
+  const separated = item[ATCH_FILES_KEY];
+  if (!Array.isArray(separated)) return [];
+  const seen = new Set<string>();
+  const attachments: { name: string; url: string }[] = [];
+  separated.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") return;
+    const url = String((entry as Record<string, unknown>).url ?? "").trim();
+    const name = String((entry as Record<string, unknown>).name ?? "").trim();
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    attachments.push({ url, name: name || `attachment-${index + 1}` });
+  });
+  return attachments;
+}
+
+// bsnsDivCd: 1 물품, 2 외자, 3 공사, 5 용역
+export async function fetchAttachmentFileList(
+  bidNtceNo: string,
+  bidNtceOrd: string,
+  bsnsDivCd?: "1" | "2" | "3" | "5",
+): Promise<{ name: string; url: string; docType: string }[]> {
+  const key = process.env.DATA_GO_KR_SERVICE_KEY;
+  if (!key) throw new Error("서버에 DATA_GO_KR_SERVICE_KEY가 설정되지 않았습니다.");
+  const query = [
+    `serviceKey=${formatServiceKey(key)}`,
+    "pageNo=1",
+    "numOfRows=100",
+    "inqryDiv=2",
+    `bidNtceNo=${encodeURIComponent(bidNtceNo)}`,
+    `bidNtceOrd=${encodeURIComponent(String(bidNtceOrd).padStart(3, "0"))}`,
+    bsnsDivCd ? `bsnsDivCd=${bsnsDivCd}` : "",
+    "type=json",
+  ].filter(Boolean).join("&");
+  const response = await requestBuffer(`${ATCH_FILE_API}?${query}`);
+  const raw = response.body.toString("utf8");
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`첨부파일정보조회 API 응답 오류 (${response.status}): ${stripXml(raw).slice(0, 200)}`);
+  }
+  let items: Record<string, unknown>[];
+  try {
+    items = normalizeItems(JSON.parse(raw));
+  } catch {
+    const resultCode = tagValue(raw, "resultCode");
+    if (resultCode && resultCode !== "00") {
+      throw new Error(tagValue(raw, "resultMsg") || tagValue(raw, "returnAuthMsg") || `첨부파일정보조회 API 오류 ${resultCode}`);
+    }
+    if (/returnAuthMsg|errMsg/i.test(raw)) {
+      throw new Error(tagValue(raw, "returnAuthMsg") || tagValue(raw, "errMsg") || "첨부파일정보조회 API 오류");
+    }
+    items = parseXmlItems(raw);
+  }
+  const wanted = Number.parseInt(String(bidNtceOrd), 10);
+  return items
+    .filter((item) => !item.bidNtceOrd || Number(item.bidNtceOrd) === wanted)
+    .sort((a, b) => Number(a.atchSno ?? 0) - Number(b.atchSno ?? 0))
+    .map((item) => ({
+      url: decodeXml(String(item.atchFileUrl ?? "").trim()),
+      name: String(item.atchFileNm ?? "").trim(),
+      docType: String(item.atchDocDivNm ?? "").trim(),
+    }))
+    .filter((entry) => entry.url);
+}
+
+// 공고 상세에 첨부 정보가 없으면 첨부파일 오퍼레이션으로 받아 detail[ATCH_FILES_KEY]에
+// 붙인다. 반환값: 새로 조회해서 detail이 바뀌었으면 true(호출부에서 캐시 갱신).
+// 조회 실패는 예외로 올린다 — 실패한 상태로 "첨부 없음"이 캐시되면 안 되기 때문.
+export async function ensureAttachmentList(
+  detail: Record<string, unknown>,
+  bsnsDivCd?: "1" | "2" | "3" | "5",
+): Promise<boolean> {
+  if (collectInlineAttachments(detail).length > 0) return false;
+  if (Array.isArray(detail[ATCH_FILES_KEY])) return false;
+  const bidNtceNo = String(detail.bidNtceNo ?? "").trim();
+  const bidNtceOrd = String(detail.bidNtceOrd ?? "").trim();
+  if (!bidNtceNo || !bidNtceOrd) return false;
+  const files = await fetchAttachmentFileList(bidNtceNo, bidNtceOrd, bsnsDivCd);
+  detail[ATCH_FILES_KEY] = files;
+  return true;
 }
 
 export function isPriorityAttachment(fileName: string): boolean {
@@ -1878,6 +1971,7 @@ async function processNotice(
         `정정차수 불일치: 요청 ${notice.requestedOrder}, 응답 ${notice.resolvedOrder}`,
       );
     }
+    await withRetry(() => ensureAttachmentList(item, "3"), 2);
     const attachments = collectAttachments(item).sort(
       (a, b) => Number(isPriorityAttachment(b.name)) - Number(isPriorityAttachment(a.name)),
     );

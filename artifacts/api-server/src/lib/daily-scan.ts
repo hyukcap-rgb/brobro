@@ -8,6 +8,7 @@ import {
   formatServiceKey,
   normalizeItems,
   collectAttachments,
+  ensureAttachmentList,
   isPriorityAttachment,
   sanitizeName,
   downloadAttachment,
@@ -221,17 +222,20 @@ type WorkSource = "물품" | "용역" | "공사";
 const WORK_SOURCE_ENDPOINTS: Record<WorkSource, { awardUrl: string; detailUrl: string }> = {
   공사: {
     awardUrl: "https://apis.data.go.kr/1230000/as/ScsbidInfoService/getScsbidListSttusCnstwk",
-    detailUrl: "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoCnstwk",
+    detailUrl: "https://apis.data.go.kr/1230000/ad/BidPublicInfoService02/getBidPblancListInfoCnstwk02",
   },
   물품: {
     awardUrl: "https://apis.data.go.kr/1230000/as/ScsbidInfoService/getScsbidListSttusThng",
-    detailUrl: "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoThng",
+    detailUrl: "https://apis.data.go.kr/1230000/ad/BidPublicInfoService02/getBidPblancListInfoThng02",
   },
   용역: {
     awardUrl: "https://apis.data.go.kr/1230000/as/ScsbidInfoService/getScsbidListSttusServc",
-    detailUrl: "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoServc",
+    detailUrl: "https://apis.data.go.kr/1230000/ad/BidPublicInfoService02/getBidPblancListInfoServc02",
   },
 };
+
+// 첨부파일정보조회(getBidPblancListInfoAtchFileInfo02)의 업무구분코드
+const WORK_SOURCE_BSNS_DIV: Record<WorkSource, "1" | "3" | "5"> = { 물품: "1", 공사: "3", 용역: "5" };
 
 const CATEGORY_TO_SOURCE: Record<string, WorkSource> = {
   물품: "물품",
@@ -480,7 +484,8 @@ async function cacheNoticeDetail(
     await db
       .insert(noticeDetailCacheTable)
       .values({ noticeNumber, source, detailJson: detail })
-      .onConflictDoNothing();
+      // 첨부파일 목록을 나중에 붙인 경우에도 캐시가 갱신되도록 upsert.
+      .onConflictDoUpdate({ target: noticeDetailCacheTable.noticeNumber, set: { detailJson: detail } });
   } catch (error) {
     // 캐시 저장 실패는 이번 실행의 매칭 결과에 영향을 주면 안 되므로(다음 번에
     // 다시 API로 조회하면 그만이다) 경고만 남기고 계속 진행한다.
@@ -798,6 +803,16 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
         if (!detail) {
           funnel.noDetail += 1;
           continue;
+        }
+
+        // 2026-11-03 조달청 공지: 첨부파일 URL이 공고 상세 응답에서 별도 오퍼레이션으로
+        // 분리됨. 상세에 첨부가 없으면 첨부파일 오퍼레이션으로 받아 붙이고 캐시를 갱신한다.
+        // (구 API로 캐시된 상세는 첨부 필드가 있으므로 추가 호출 없음)
+        try {
+          const changed = (await withRetry(() => ensureAttachmentList(detail!, WORK_SOURCE_BSNS_DIV[source]), 2)).value;
+          if (changed) await cacheNoticeDetail(noticeNumber, source, detail);
+        } catch (error) {
+          logger.warn({ err: error, noticeNumber, source }, "일별 스캔: 첨부파일정보 조회 실패");
         }
 
         // 요구사항(2026-09-15 사용자 요청: "키워드 2번째를 설정할 수 있도록
