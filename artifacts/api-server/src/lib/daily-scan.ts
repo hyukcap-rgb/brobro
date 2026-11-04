@@ -17,7 +17,6 @@ import {
   searchSegments,
   withRetry,
   describeError,
-  extractItemFields,
   extractSiteAddress,
   extractGeneralAddress,
   extractBusinessContactFromText,
@@ -34,6 +33,7 @@ import { buildMatchesXlsx, groupMatchesByNotice, listAwardedMatchesForRun } from
 import { sendScanResultEmail, type ScanResultEmailAttachment } from "./mailer";
 import { logger } from "./logger";
 import { extractConstructionPeriod, extractConstructionPeriodFromDetail } from "./construction-period";
+import { classifyDocument, dropUnitPriceSections, qualifyBoqRow, summarizeNeed, type QualifiedRow } from "./need-qualifier";
 
 // 요구사항(2026-09-28 사용자 요청: "이메일로 보내는것도 수량기준으로 정렬해서
 // 보내줘"): matches.tsx 화면의 기본 정렬을 수량 내림차순으로 바꾼 것과 같은
@@ -715,6 +715,10 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
     // 어떨까"): API를 다시 부르지 않고 캐시로 해결한 건수 — 이 수가 클수록
     // 오늘 절약한 API 호출 수라고 보면 된다.
     detailFromCache: 0,
+    // 2026-11-04 소요량 판정: 키워드는 있었지만 내역서가 아니라서(시방서·공고문 등)
+    // 또는 내역서 행 구조가 아니라서(문장, 1식, 치수만 등) 리드에서 뺀 건수.
+    needRejectedNonBoqFile: 0,
+    needRejectedRow: 0,
   };
 
   // 같은 낙찰자가 여러 건 매칭되면(같은 공고의 여러 첨부파일, 또는 여러 공고를
@@ -920,6 +924,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           values: InsertAwardedMatch;
           quantityValue: number | null;
           unit: string | null;
+          need: QualifiedRow;
         }[] = [];
 
         // 요구사항(2026-09-18 사용자 요청: "주소는 현장주소를 1번으로 하고
@@ -1019,7 +1024,25 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               }
 
               // 요구사항 4: 설정된 키워드(=선택한 품목, 기본 "부직포")가 있는 공고만.
-              const matches = searchSegments(segments, settings.matchKeywords);
+              // 2026-11-04 소요량 판정(need-qualifier.ts): 수량 근거는 내역서뿐이다.
+              // 시방서·공고문 등은 본문 누적(현장주소·공사기간 추출용)만 하고 매칭은 하지 않는다.
+              const docKind = classifyDocument(
+                [attachment.name, path.basename(searchablePath)],
+                segments.map((segment) => segment.itemContext ?? segment.text),
+              );
+              // 내역서 안의 일위대가표(단위당 소요량) 구간은 총 소요량이 아니므로 뺀다.
+              const matches = searchSegments(
+                docKind === "boq" ? dropUnitPriceSections(segments) : segments,
+                settings.matchKeywords,
+              );
+              if (matches.length > 0 && docKind !== "boq") {
+                funnel.needRejectedNonBoqFile += 1;
+                logger.info(
+                  { noticeNumber, fileName: path.basename(searchablePath), docKind, matchCount: matches.length },
+                  "일별 스캔[소요량]: 내역서가 아닌 문서의 키워드 언급이라 제외",
+                );
+                continue;
+              }
               logger.debug(
                 {
                   noticeNumber,
@@ -1041,43 +1064,20 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
 
               for (const match of matches) {
                 const matchedKeyword = match.foundKeywords[0] ?? settings.matchKeywords[0] ?? "";
-                const itemFields = extractItemFields(match.originalText, settings.matchKeywords);
-                const quantityValue =
-                  itemFields.itemQuantity && itemFields.itemQuantity !== "미공개/확인불가"
-                    ? Number(itemFields.itemQuantity.replace(/,/g, ""))
-                    : null;
-                const unit =
-                  itemFields.itemUnit && itemFields.itemUnit !== "미공개/확인불가"
-                    ? itemFields.itemUnit
-                    : null;
-                const quantityText =
-                  [itemFields.itemQuantity, itemFields.itemUnit]
-                    .filter((value) => value && value !== "미공개/확인불가")
-                    .join(" ") || null;
-                // 요구사항(2026-09-10 사용자 요청: "수량이 없는 키워드는 검색하지
-                // 마 ... 검색 결과에 키워드/수량을 꼭 함께 넣어줘"): 문서에 키워드
-                // 단어 자체는 있어도 수량을 특정할 수 없으면 실제 발주 물량을 알 수
-                // 없는 단순 언급일 가능성이 커서 영업 리드로 만들지 않는다.
-                //
-                // 요구사항(2026-09-22 사용자 재지적: brog2b.com 실제 결과 화면에서
-                // "부직포 · M2"처럼 숫자 없이 단위만 붙거나, "부직포 · 0 m²"처럼
-                // 수량이 0으로 기재된 행이 같은 공고에서 여러 건 노출되는 문제 발견
-                // — 예: "2026년 긴급누수복구공사 연간단가계약(북구3권역)2차" 공고
-                // 하나가 전부 "부직포 · 0 m²"인 행 24건으로 목록을 채움): 단위 셀만
-                // 단독으로 매칭되면 itemQuantity가 비어도(itemUnit만 있어도) 위
-                // quantityText는 "M2"처럼 채워져 truthy가 되고, 마찬가지로
-                // itemQuantity가 문자 그대로 "0"이면 quantityText가 "0 ㎡"로 채워져
-                // 역시 truthy가 되어 둘 다 위 필터를 통과해 버렸다. 실제 발주 수량이
-                // 없거나(단위만 있음) 0으로 기재된 경우는 "수량 미상"과 실질적으로
-                // 같은 상황(발주 물량을 알 수 없음)이므로 원래 취지대로 함께
-                // 제외한다.
-                if (!quantityText || quantityValue == null || quantityValue <= 0) continue;
-                // 요구사항(2026-09-18 사용자 요청: "관급자제 에 키워드가 있는경우
-                // 검색하지 않아도 됨. 키워드가 관급자제 아래 검색하려는 키워드가
-                // 있는경우 삭제 해줘.이건 우리가 영업을 하지 못해"): 관급자재는
-                // 발주기관이 직접 사급(공급)하는 자재라 시공사가 납품 영업을 할 수
-                // 없는 항목이므로, 애초에 리드 후보에도 넣지 않는다.
                 if (match.section === "관급자재") continue;
+                const need = qualifyBoqRow(match.originalText, settings.matchKeywords);
+                if (!need.ok) {
+                  funnel.needRejectedRow += 1;
+                  logger.debug(
+                    { noticeNumber, reason: need.reason, text: match.originalText.slice(0, 200) },
+                    "일별 스캔[소요량]: 내역서 행 판정 탈락",
+                  );
+                  continue;
+                }
+                const quantityValue = need.areaSqm ?? need.quantity;
+                const unit = need.areaSqm !== null ? "㎡" : need.unitLabel;
+                const quantityText = need.quantityText;
+
                 // 요구사항(2026-09-18 사용자 재지적: "키워드가 있는 건 중 금액 설정하는
                 // 방법과 10억이상 공사건 중 키워드가 없는건 중 제목에 새로 지정하는
                 // 키워드가 있는거는 검색해 달라는거야. 키워드와 키워드2 개념이야. 둘은
@@ -1140,6 +1140,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                   },
                   quantityValue,
                   unit,
+                  need,
                 });
               }
             }
@@ -1181,22 +1182,25 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
           // 구체적으로 제시한 면적 단위에 한정해서 적용한다 — 개/식/kg/톤처럼 규모
           // 단위가 전혀 다른 수량까지 같은 "1000 이하"로 재단하면 오히려 정상적인
           // 리드를 놓칠 수 있어서다.
-          const AREA_UNITS = new Set(["㎡", "m²", "m2", "M2"]);
+          // 2026-11-04 소요량 판정: 같은 공고의 유효 내역서 행을 합쳐 총 소요량을 낸다.
+          // 기존 규칙("부직포는 1,000㎡ 이하는 리드로 보지 말 것")을 단독 매칭이 아니라
+          // 공고 전체 총량에 적용한다 — 면적으로 환산되지 않는 행(kg·개 등)이 있으면 유지.
           let finalInserts = dedupedPendingInserts;
-          if (dedupedPendingInserts.length === 1) {
-            const only = dedupedPendingInserts[0];
-            if (
-              only.unit &&
-              AREA_UNITS.has(only.unit) &&
-              only.quantityValue != null &&
-              Number.isFinite(only.quantityValue) &&
-              only.quantityValue <= 1000
-            ) {
+          if (dedupedPendingInserts.length > 0) {
+            const summary = summarizeNeed(dedupedPendingInserts.map((entry) => entry.need));
+            const hasNonAreaRow = dedupedPendingInserts.some((entry) => entry.need.areaSqm === null);
+            if (summary.totalAreaSqm !== null && summary.totalAreaSqm <= 1000 && !hasNonAreaRow) {
               finalInserts = [];
               logger.info(
-                { noticeNumber, quantityValue: only.quantityValue, unit: only.unit },
-                "일별 스캔: 1,000㎡ 이하 단독 매칭이라 리드 제외",
+                { noticeNumber, totalAreaSqm: summary.totalAreaSqm, rows: dedupedPendingInserts.length },
+                "일별 스캔: 내역서 총 소요량 1,000㎡ 이하라 리드 제외",
               );
+            } else {
+              for (const entry of dedupedPendingInserts) {
+                entry.values.surroundingText = `[소요량 판정] ${summary.text} · 이 항목: ${entry.need.itemName}${
+                  entry.need.specification ? ` / ${entry.need.specification}` : ""
+                } ${entry.need.quantityText}\n${entry.values.surroundingText ?? ""}`;
+              }
             }
           }
           if (finalInserts.length > 0) {
