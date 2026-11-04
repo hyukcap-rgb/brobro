@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import nodemailer from "nodemailer";
 import { logger } from "./logger";
 
@@ -40,6 +41,42 @@ export interface ScanResultEmailAttachment {
   path: string;
 }
 
+// Gmail은 메일 1통 25MB 제한이고 첨부는 base64로 약 1.37배 커진다. 본문/헤더
+// 여유까지 두고 원본 기준 합계 17MB까지만 첨부한다(2026-11-04: 첨부가 많은 날
+// 메일 전체가 반려되던 문제 대응). 넘치는 파일은 빼고 본문에 목록만 남긴다.
+const MAX_ATTACHMENT_TOTAL_BYTES = Number(process.env.MAIL_MAX_ATTACHMENT_MB ?? 17) * 1024 * 1024;
+
+async function fitAttachments(
+  attachments: ScanResultEmailAttachment[],
+): Promise<{ included: ScanResultEmailAttachment[]; skipped: string[] }> {
+  const included: ScanResultEmailAttachment[] = [];
+  const skipped: string[] = [];
+  let total = 0;
+  // 순서 유지: 호출부가 엑셀을 맨 앞에 넣으므로 엑셀이 항상 먼저 들어간다.
+  for (const attachment of attachments) {
+    let size = 0;
+    try {
+      size = (await stat(attachment.path)).size;
+    } catch {
+      skipped.push(attachment.filename);
+      continue;
+    }
+    if (total + size > MAX_ATTACHMENT_TOTAL_BYTES) {
+      skipped.push(attachment.filename);
+      continue;
+    }
+    total += size;
+    included.push(attachment);
+  }
+  return { included, skipped };
+}
+
+function describeMailError(error: unknown): string {
+  if (!error || typeof error !== "object") return String(error);
+  const e = error as { message?: string; code?: string; responseCode?: number; command?: string };
+  return [e.code, e.responseCode, e.command, e.message].filter(Boolean).join(" / ");
+}
+
 export interface ScanResultEmailParams {
   to: string[];
   /** "9/12" 형식(월/일, 0 없음) — 검색 대상 날짜(낙찰일 기준). */
@@ -63,7 +100,7 @@ const TABLE_HEADERS = ["현장명(공고명)", "발주기관", "낙찰자", "매
 // 나왔는지만 표현해줘"): 호출부(daily-scan.ts)가 이제 매칭을 공고 단위로
 // 묶어서 넘기므로(매칭키워드 칸에 "외N건" 포함), 여기 params.matches는
 // "매칭 건수"가 아니라 "공고 건수"다 — 안내 문구도 그에 맞춘다.
-function buildHtml(params: ScanResultEmailParams): string {
+function buildHtml(params: ScanResultEmailParams, skipped: string[] = []): string {
   const rows = params.matches
     .map((match) => {
       const cells = [
@@ -90,6 +127,7 @@ function buildHtml(params: ScanResultEmailParams): string {
         <tbody>${rows}</tbody>
       </table>
       ${params.attachments.length > 0 ? `<p style="margin-top:12px;">첨부파일 ${params.attachments.length}건을 함께 보냅니다.</p>` : ""}
+      ${skipped.length > 0 ? `<p style="margin-top:8px;color:#a15c00;">메일 용량 제한(25MB)으로 아래 ${skipped.length}개 파일은 첨부하지 못했습니다. 사이트에서 내려받아 주세요.<br>${skipped.map(escapeHtml).join("<br>")}</p>` : ""}
       <p style="margin-top:16px;color:#777;font-size:12px;">이 메일은 나라장터 공고 검색 시스템에서 자동 발송되었습니다. 받는 주소는 설정 화면에서 추가/삭제할 수 있습니다.</p>
     </div>`;
 }
@@ -153,19 +191,36 @@ export async function sendScanResultEmail(params: ScanResultEmailParams): Promis
     return;
   }
   const subject = `나라장터 검색결과_${params.dateLabel}일_${params.matches.length}건`;
-  const html = buildHtml(params);
+  const { included, skipped } = await fitAttachments(params.attachments);
+  const html = buildHtml({ ...params, attachments: included }, skipped);
+  // 첨부 포함 발송이 실패하면 첫 번째 첨부(엑셀)만 붙여 한 번 더 보낸다 —
+  // 첨부 때문에 결과 메일 자체를 못 받는 일이 없도록.
+  const fallbackAttachments = included.slice(0, 1);
+  const fallbackSkipped = [...included.slice(1).map((a) => a.filename), ...skipped];
   for (const recipient of params.to) {
     try {
-      await transporter.sendMail({
-        from: MAIL_USER,
-        to: recipient,
-        subject,
-        html,
-        attachments: params.attachments,
-      });
-      logger.info({ to: recipient, matches: params.matches.length }, "일일 검색결과 메일 발송 완료");
+      await transporter.sendMail({ from: MAIL_USER, to: recipient, subject, html, attachments: included });
+      logger.info(
+        { to: recipient, matches: params.matches.length, attached: included.length, skipped: skipped.length },
+        "일일 검색결과 메일 발송 완료",
+      );
     } catch (error) {
-      logger.error({ err: error, to: recipient }, "일일 검색결과 메일 발송 실패");
+      logger.error({ err: error, to: recipient }, `일일 검색결과 메일 발송 실패: ${describeMailError(error)}`);
+      try {
+        await transporter.sendMail({
+          from: MAIL_USER,
+          to: recipient,
+          subject,
+          html: buildHtml({ ...params, attachments: fallbackAttachments }, fallbackSkipped),
+          attachments: fallbackAttachments,
+        });
+        logger.info({ to: recipient }, "일일 검색결과 메일 발송 완료(첨부 축소 재발송)");
+      } catch (retryError) {
+        logger.error(
+          { err: retryError, to: recipient },
+          `일일 검색결과 메일 재발송 실패: ${describeMailError(retryError)}`,
+        );
+      }
     }
   }
 }

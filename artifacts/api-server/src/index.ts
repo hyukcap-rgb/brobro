@@ -3,7 +3,7 @@ import { logger } from "./lib/logger";
 import { ensureAdminSeeded, ensureExtraAdminSeeded } from "./lib/auth";
 import { startDailyScanScheduler, startAttachmentCleanupScheduler } from "./lib/scheduler";
 import { ensureApiQuotaSchema } from "./lib/api-quota";
-import { recoverOrphanedScanRuns } from "./lib/daily-scan";
+import { recoverOrphanedScanRuns, resendScheduleResultEmailsForDate } from "./lib/daily-scan";
 import { clearStoredBidderAddresses } from "./lib/matches-store";
 import { sendTestEmail } from "./lib/mailer";
 import { requestBuffer, formatServiceKey, compactDate } from "./lib/bid-processing";
@@ -124,6 +124,11 @@ ensureSchema()
   .then(() => startAttachmentCleanupScheduler())
   .then(() => startConstructionPeriodBackfill())
   .then(() => maybeSendTestEmail())
+  .then(async () => {
+    // RESEND_SCAN_EMAIL_DATE=YYYY-MM-DD 가 있으면 그날 자동 스캔 결과 메일을 1회 재발송.
+    const date = process.env.RESEND_SCAN_EMAIL_DATE?.trim();
+    if (date) await resendScheduleResultEmailsForDate(date);
+  })
   .then(() => maybeRunLhApiTest())
   .catch((err: unknown) => {
     logger.error({ err }, "Could not initialize database schema/admin account");

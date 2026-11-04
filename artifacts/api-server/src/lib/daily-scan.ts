@@ -1651,6 +1651,30 @@ function formatDateLabel(dateKeys: string[]): string {
 // 새로 저장된 매칭(matchesFound > 0)이 있고 설정에 등록된 수신 주소가 있을
 // 때만 보낸다. 메일 발송이 실패해도 스캔 실행 자체의 성공/실패 판정에는
 // 영향을 주지 않도록 별도로 감싼다.
+// 2026-11-04: 메일 발송이 실패한 날의 결과 메일을 다시 보내기 위한 일회성 도구.
+// RESEND_SCAN_EMAIL_DATE=YYYY-MM-DD(KST 실행일)가 설정돼 있으면 기동 시 그날 시작된
+// 자동(schedule) 스캔 중 완료되고 매칭이 있는 실행의 결과 메일을 다시 보낸다.
+// 보낸 뒤에는 환경변수를 지워 재기동마다 다시 나가지 않게 한다.
+export async function resendScheduleResultEmailsForDate(kstDate: string): Promise<void> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(kstDate)) {
+    logger.warn({ kstDate }, "결과 메일 재발송: 날짜 형식 오류(YYYY-MM-DD) - 건너뜀");
+    return;
+  }
+  const dayStart = new Date(`${kstDate}T00:00:00+09:00`);
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+  const runs = await db
+    .select()
+    .from(dailyScanRunsTable)
+    .where(eq(dailyScanRunsTable.triggerType, "schedule"))
+    .orderBy(desc(dailyScanRunsTable.startedAt))
+    .limit(50);
+  const targets = runs.filter(
+    (run) => run.startedAt >= dayStart && run.startedAt < dayEnd && run.status === "completed" && run.matchesFound > 0,
+  );
+  logger.info({ kstDate, runIds: targets.map((run) => run.id) }, `결과 메일 재발송 대상 ${targets.length}건`);
+  for (const run of targets) await sendScheduleResultEmailIfNeeded(run);
+}
+
 async function sendScheduleResultEmailIfNeeded(run: DailyScanRun): Promise<void> {
   try {
     if (run.status !== "completed" || run.matchesFound <= 0) return;
