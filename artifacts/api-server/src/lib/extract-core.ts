@@ -105,6 +105,13 @@ async function openZip(filePath: string): Promise<unzipper.CentralDirectory> {
   }
 }
 
+// 2026-11-04: 나라장터 내역서 생성기 중 일부는 엑셀 XML 태그에 네임스페이스 접두어를
+// 붙인다(<x:sst><x:si><x:t>…, <x:row><x:c r="A1">…). 기존 파서는 <si>/<row>/<c>만
+// 찾아서 이런 내역서는 글자를 하나도 못 읽었다(검색 0건). 접두어를 떼고 파싱한다.
+function stripXmlPrefixes(xml: string): string {
+  return xml.replace(/<(\/?)[A-Za-z][\w.-]*:(?=[A-Za-z])/g, "<$1");
+}
+
 async function unzipText(
   archive: unzipper.CentralDirectory,
   entryPath: string,
@@ -188,7 +195,7 @@ function isReferenceOnlyContentSheet(
 async function resolveSheetNames(archive: unzipper.CentralDirectory): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   try {
-    const relsXml = await unzipText(archive, "xl/_rels/workbook.xml.rels");
+    const relsXml = stripXmlPrefixes(await unzipText(archive, "xl/_rels/workbook.xml.rels"));
     const ridToTarget = new Map<string, string>();
     for (const rel of relsXml.matchAll(/<Relationship\b([^>]*)\/>/g)) {
       const attrs = rel[1];
@@ -196,7 +203,7 @@ async function resolveSheetNames(archive: unzipper.CentralDirectory): Promise<Ma
       const target = /\bTarget="([^"]+)"/.exec(attrs)?.[1];
       if (id && target) ridToTarget.set(id, target);
     }
-    const workbookXml = await unzipText(archive, "xl/workbook.xml");
+    const workbookXml = stripXmlPrefixes(await unzipText(archive, "xl/workbook.xml"));
     for (const sheetTag of workbookXml.matchAll(/<sheet\b([^>]*)\/>/g)) {
       const attrs = sheetTag[1];
       const name = /\bname="([^"]*)"/.exec(attrs)?.[1];
@@ -221,7 +228,7 @@ async function resolveSheetNames(archive: unzipper.CentralDirectory): Promise<Ma
 async function extractXlsx(filePath: string): Promise<ExtractedSegment[]> {
   const archive = await openZip(filePath);
   const entries = archive.files.map((entry) => entry.path);
-  const sharedXml = await unzipText(archive, "xl/sharedStrings.xml");
+  const sharedXml = stripXmlPrefixes(await unzipText(archive, "xl/sharedStrings.xml"));
   // 빈 공유 문자열(<si/>)도 인덱스 하나를 차지하므로 건너뛰지 않고 ""로 둔다.
   const sharedStrings = [...sharedXml.matchAll(/<si\b[^>]*?(?:\/>|>([\s\S]*?)<\/si>)/g)].map((match) =>
     match[1] === undefined ? "" : stripXml(match[1]),
@@ -233,7 +240,7 @@ async function extractXlsx(filePath: string): Promise<ExtractedSegment[]> {
     const internalSheetName = path.basename(sheetEntry, ".xml");
     const sheetName = sheetNameMap.get(internalSheetName) ?? internalSheetName;
     if (EXCLUDED_REFERENCE_SHEET_PATTERN.test(sheetName)) continue;
-    const xml = await unzipText(archive, sheetEntry);
+    const xml = stripXmlPrefixes(await unzipText(archive, sheetEntry));
     // 빈 행도 <row r="5" s="2" customFormat="1"/>처럼 자체 닫힘으로 나온다 —
     // 예전 패턴은 이걸 다음 행 내용과 한 행으로 묶어버렸다(아래 셀 패턴과 같은 원인).
     const rowMatches = [...xml.matchAll(/<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g)];
