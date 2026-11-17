@@ -6,6 +6,7 @@ import type { Response } from "express";
 import { and, count, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { db, awardedMatchesTable, dailyScanRunsTable, type AwardedMatch, type DailyScanRun } from "@workspace/db";
 import { command } from "./bid-processing";
+import { qualifyBoqRow } from "./need-qualifier";
 
 // 요구사항(2026-09-18 사용자 요청: "admin 과 msjbro 는 별도의 독립적인 id
 // 야. msjbro에는 admin 의 모든 정보를 공유하지않아... 두 아이디로 입력은
@@ -372,6 +373,34 @@ export async function clearStoredBidderAddresses(): Promise<number> {
     .where(isNotNull(awardedMatchesTable.bidderAddress))
     .returning({ id: awardedMatchesTable.id });
   return cleared.length;
+}
+
+// 요구사항(2026-11-17 사용자 지적: 수량이 "56,802,787,001"처럼 이상하게 나옴):
+// 예전 판정이 공내역서의 빈 단가 칸을 건너뛰어 행 끝의 코드 숫자를 수량으로 읽은
+// 기록을 바로잡는다. 저장된 행 문맥으로 고친 판정을 다시 돌려 맞는 수량으로 바꾸고,
+// 그래도 수량을 못 찾으면 수량을 비운다. 서버가 뜰 때마다 실행(멱등).
+export async function repairImplausibleQuantities(): Promise<{ fixed: number; cleared: number }> {
+  const rows = await db
+    .select({
+      id: awardedMatchesTable.id,
+      quantityText: awardedMatchesTable.quantityText,
+      surroundingText: awardedMatchesTable.surroundingText,
+      matchedKeyword: awardedMatchesTable.matchedKeyword,
+    })
+    .from(awardedMatchesTable)
+    .where(isNotNull(awardedMatchesTable.quantityText));
+  let fixed = 0;
+  let cleared = 0;
+  for (const row of rows) {
+    const value = Number((row.quantityText ?? "").replace(/,/g, "").match(/[0-9.]+/)?.[0] ?? NaN);
+    if (!(value > 10_000_000)) continue;
+    const need = row.surroundingText ? qualifyBoqRow(row.surroundingText, [row.matchedKeyword]) : null;
+    const quantityText = need && need.ok ? need.quantityText : null;
+    await db.update(awardedMatchesTable).set({ quantityText }).where(eq(awardedMatchesTable.id, row.id));
+    if (quantityText) fixed += 1;
+    else cleared += 1;
+  }
+  return { fixed, cleared };
 }
 
 export function sendDownload(res: Response, filePath: string, fileName: string): void {

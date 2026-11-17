@@ -77,10 +77,42 @@ export interface RejectedRow {
   reason: string;
 }
 
-function splitCells(text: string): string[] {
-  const parts = text.includes("|") ? text.split("|") : text.split(/\t+|\s{2,}/);
-  return parts.map((part) => part.trim().replace(/^[A-Z]{1,3}\d+=/, "").trim()).filter(Boolean);
+interface RowCell {
+  text: string;
+  /** 엑셀 열 번호(A=1). 엑셀 행 문맥("A1=.. | B1=..")이 아니면 null. */
+  col: number | null;
 }
+
+function columnNumber(letters: string): number {
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n;
+}
+
+function splitCells(text: string): RowCell[] {
+  const parts = text.includes("|") ? text.split("|") : text.split(/\t+|\s{2,}/);
+  const cells: RowCell[] = [];
+  for (const part of parts) {
+    const raw = part.trim();
+    const address = /^([A-Z]{1,3})\d+=/.exec(raw);
+    const value = (address ? raw.slice(address[0].length) : raw).trim();
+    if (value) cells.push({ text: value, col: address ? columnNumber(address[1]) : null });
+  }
+  return cells;
+}
+
+// 요구사항(2026-11-17 사용자 지적: 서로 다른 두 공고에 수량이 "56,802,787,001",
+// "56,802,787,081"처럼 터무니없이 나옴): 빈 칸을 걸러낸 뒤 "단위 칸 바로 다음 칸"을
+// 수량으로 봤더니, 공내역서처럼 단가·금액 칸이 비어 있으면 그 빈 칸들을 건너뛰고 행
+// 맨 끝의 코드(표준코드·품목코드 등 11자리 숫자) 칸을 수량으로 읽었다. 엑셀이면 실제
+// 열 번호로 "정말 옆 칸인지"를 확인한다.
+function isNeighbor(a: RowCell, b: RowCell): boolean {
+  if (a.col === null || b.col === null) return true;
+  return Math.abs(a.col - b.col) === 1;
+}
+
+// 수량으로 보기엔 비정상적으로 큰 값(코드·금액이 잘못 잡힌 경우)의 상한.
+const MAX_PLAUSIBLE_QUANTITY = 10_000_000;
 
 function parseNumber(value: string): number {
   return Number(value.replace(/,/g, ""));
@@ -102,7 +134,8 @@ function formatNumber(value: number): string {
 
 // 내역서의 한 행(엑셀은 "A1=.. | B1=.." 형태, PDF는 탭/공백 구분 한 줄)을 판정한다.
 export function qualifyBoqRow(rowText: string, keywords: readonly string[]): QualifiedRow | RejectedRow {
-  const cells = splitCells(rowText);
+  const rowCells = splitCells(rowText);
+  const cells = rowCells.map((cell) => cell.text);
   if (cells.length === 0) return { ok: false, reason: "빈 행" };
   const lowerKeywords = keywords.map((keyword) => keyword.toLowerCase().replace(/\s+/g, "")).filter(Boolean);
   const keywordIndex = cells.findIndex((cell) => {
@@ -125,9 +158,14 @@ export function qualifyBoqRow(rowText: string, keywords: readonly string[]): Qua
       if (!candidateUnit) continue;
       const after = cells[index + 1];
       const before = cells[index - 1];
-      if (after !== undefined && NUMERIC.test(after)) {
+      if (after !== undefined && NUMERIC.test(after) && isNeighbor(rowCells[index], rowCells[index + 1])) {
         quantity = parseNumber(after);
-      } else if (index - 1 > keywordIndex && before !== undefined && NUMERIC.test(before)) {
+      } else if (
+        index - 1 > keywordIndex &&
+        before !== undefined &&
+        NUMERIC.test(before) &&
+        isNeighbor(rowCells[index], rowCells[index - 1])
+      ) {
         quantity = parseNumber(before);
       }
       if (quantity !== null) {
@@ -162,6 +200,9 @@ export function qualifyBoqRow(rowText: string, keywords: readonly string[]): Qua
 
   if (quantity === null || unit === null || !Number.isFinite(quantity) || quantity <= 0) {
     return { ok: false, reason: "단위와 짝을 이룬 수량 칸이 없음" };
+  }
+  if (quantity > MAX_PLAUSIBLE_QUANTITY) {
+    return { ok: false, reason: "수량으로 보기엔 너무 큰 숫자(코드·금액 칸으로 보임)" };
   }
   if (unit.kind === "lump") {
     return { ok: false, reason: "1식(일괄) 표기라 소요량을 알 수 없음" };

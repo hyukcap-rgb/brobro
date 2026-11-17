@@ -4,7 +4,7 @@ import { ensureAdminSeeded, ensureExtraAdminSeeded } from "./lib/auth";
 import { startDailyScanScheduler, startAttachmentCleanupScheduler } from "./lib/scheduler";
 import { ensureApiQuotaSchema } from "./lib/api-quota";
 import { recoverOrphanedScanRuns, resendScheduleResultEmailsForDate } from "./lib/daily-scan";
-import { clearStoredBidderAddresses } from "./lib/matches-store";
+import { clearStoredBidderAddresses, repairImplausibleQuantities } from "./lib/matches-store";
 import { sendTestEmail } from "./lib/mailer";
 import { requestBuffer, formatServiceKey, compactDate } from "./lib/bid-processing";
 import { ensureSchema } from "@workspace/db";
@@ -119,6 +119,8 @@ ensureSchema()
   .then(async () => {
     const cleared = await clearStoredBidderAddresses();
     if (cleared > 0) logger.info({ cleared }, "저장돼 있던 낙찰자 사업장 주소 삭제");
+    const repaired = await repairImplausibleQuantities();
+    if (repaired.fixed + repaired.cleared > 0) logger.info(repaired, "비정상 수량(코드 숫자 오인) 기록 정정");
   })
   .then(() => startDailyScanScheduler())
   .then(() => startAttachmentCleanupScheduler())
