@@ -277,3 +277,38 @@ export function dropUnitPriceSections<T extends { text: string; sheet: string | 
     return !inUnitPrice;
   });
 }
+
+// 요구사항(2026-11-17 사용자 지적: "계속 같은 오류가 왜 생기는거지?" → "옮겨"): 행 글자에서
+// 숫자·단위 모양으로 수량을 짐작하던 qualifyBoqRow 대신, 표 머리행으로 "수량" 칸을 확인한
+// 행(doc-rows.ts + keyword-evidence.ts confirmedRows, narafile과 같은 방식)으로 소요량을 낸다.
+// 여기서는 그 행의 품명·규격·단위·수량을 받아 ㎡ 환산과 표시 문구만 만든다.
+export function qualifyStructuredRow(row: {
+  item?: string;
+  spec?: string;
+  unit?: string;
+  qty?: number | null;
+}): QualifiedRow | RejectedRow {
+  const quantity = row.qty ?? null;
+  if (quantity === null || !Number.isFinite(quantity) || quantity <= 0) return { ok: false, reason: "수량 칸이 비었거나 0" };
+  if (quantity > MAX_PLAUSIBLE_QUANTITY) return { ok: false, reason: "수량으로 보기엔 너무 큰 숫자" };
+  const rawUnit = (row.unit ?? "").replace(/\s+/g, "");
+  const known = rawUnit ? unitOf(rawUnit) : null;
+  if (known?.kind === "lump") return { ok: false, reason: "1식(일괄) 표기라 소요량을 알 수 없음" };
+  const unit = known ?? { kind: "count" as UnitKind, label: rawUnit };
+  const itemName = (row.item ?? "").trim();
+  const specification = row.spec?.trim() || null;
+  const specSource = [itemName, specification ?? ""].join(" ");
+  let areaSqm: number | null = null;
+  if (unit.kind === "area") areaSqm = quantity;
+  else if (unit.kind === "length") {
+    const width = widthMetersOf(specSource);
+    if (width && width > 0 && width <= 10) areaSqm = quantity * width;
+  } else if (unit.kind === "roll") {
+    const dims = /([0-9]+(?:\.[0-9]+)?)\s*m\s*[x×*]\s*([0-9]+(?:\.[0-9]+)?)\s*m/i.exec(specSource);
+    if (dims) areaSqm = quantity * Number(dims[1]) * Number(dims[2]);
+  }
+  const shown = Number.isInteger(quantity) ? formatNumber(quantity) : quantity.toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+  const base = unit.label ? `${shown} ${unit.label}` : shown;
+  const quantityText = areaSqm !== null && unit.kind !== "area" ? `${base} (약 ${formatNumber(areaSqm)}㎡)` : base;
+  return { ok: true, itemName, specification, quantity, unitLabel: unit.label, unitKind: unit.kind, areaSqm, quantityText };
+}

@@ -33,7 +33,10 @@ import { buildMatchesXlsx, groupMatchesByNotice, listAwardedMatchesForRun } from
 import { sendScanResultEmail, type ScanResultEmailAttachment } from "./mailer";
 import { logger } from "./logger";
 import { extractConstructionPeriod, extractConstructionPeriodFromDetail } from "./construction-period";
-import { classifyDocument, dropUnitPriceSections, qualifyBoqRow, summarizeNeed, type QualifiedRow } from "./need-qualifier";
+import { classifyDocument, dropUnitPriceSections, qualifyStructuredRow, summarizeNeed, type QualifiedRow } from "./need-qualifier";
+import { fileRows, type DocRow } from "./doc-rows";
+import { confirmedRows } from "./keyword-evidence";
+import { normalizeForMatch } from "./keyword-text";
 
 // 요구사항(2026-09-28 사용자 요청: "이메일로 보내는것도 수량기준으로 정렬해서
 // 보내줘"): matches.tsx 화면의 기본 정렬을 수량 내림차순으로 바꾼 것과 같은
@@ -43,6 +46,54 @@ import { classifyDocument, dropUnitPriceSections, qualifyBoqRow, summarizeNeed, 
 // (matches.tsx의 parseQuantityForSort)와 동일한 규칙이지만, 패키지가 달라
 // 공유 유틸 없이 각자 구현했다(2026-09-24 groupMatchesByNotice 관련 주석
 // 참고 — 같은 이유). 수량이 없는 매칭은 항상 맨 뒤로 보낸다.
+type SearchMatch = ReturnType<typeof searchSegments>[number];
+
+// 첨부파일 하나를 표 구조로 읽어 키워드별 "수량 확인된" 행을 소요량 후보로 만든다.
+// 각 행에는 화면·연락처 추출에 쓰던 기존 매칭(주변 글)을 품명이 같은 것으로 짝지어 붙인다.
+const STRUCTURED_MAX_BYTES = 40 * 1024 * 1024;
+async function structuredNeedsForFile(
+  filePath: string,
+  attachmentName: string,
+  keywords: readonly string[],
+  matches: SearchMatch[],
+  noticeNumber: string,
+): Promise<{ match: SearchMatch; need: QualifiedRow; matchedKeyword: string; row: DocRow }[]> {
+  if (matches.length === 0) return [];
+  let rows: DocRow[];
+  try {
+    const size = (await stat(filePath)).size;
+    if (size > STRUCTURED_MAX_BYTES) {
+      logger.warn({ noticeNumber, fileName: attachmentName, size }, "일별 스캔[소요량]: 파일이 커서 표 구조 읽기 생략");
+      return [];
+    }
+    rows = await fileRows(filePath, attachmentName || path.basename(filePath));
+  } catch (error) {
+    logger.warn(
+      { noticeNumber, fileName: attachmentName, err: error instanceof Error ? error.message : String(error) },
+      "일별 스캔[소요량]: 표 구조 읽기 실패",
+    );
+    return [];
+  }
+  const squash = (text: string) => normalizeForMatch(text).replace(/\s+/g, "");
+  const out: { match: SearchMatch; need: QualifiedRow; matchedKeyword: string; row: DocRow }[] = [];
+  for (const keyword of keywords) {
+    for (const row of confirmedRows(rows, keyword)) {
+      const need = qualifyStructuredRow(row);
+      if (!need.ok) {
+        logger.debug({ noticeNumber, reason: need.reason, item: row.item, qty: row.qty }, "일별 스캔[소요량]: 표 행 판정 탈락");
+        continue;
+      }
+      const item = squash(row.item ?? "");
+      const match =
+        matches.find((m) => item && squash(m.originalText).includes(item) && m.foundKeywords.includes(keyword)) ??
+        matches.find((m) => m.foundKeywords.includes(keyword)) ??
+        matches[0];
+      out.push({ match, need, matchedKeyword: keyword, row });
+    }
+  }
+  return out;
+}
+
 function parseQuantityForSort(quantityText: string | null | undefined): number {
   if (!quantityText) return -Infinity;
   const match = quantityText.replace(/,/g, "").match(/[\d.]+/);
@@ -1062,18 +1113,31 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
               const storedPath = path.join(storedDir, path.basename(searchablePath));
               await copyFile(searchablePath, storedPath).catch(() => {});
 
-              for (const match of matches) {
-                const matchedKeyword = match.foundKeywords[0] ?? settings.matchKeywords[0] ?? "";
+              // 요구사항(2026-11-17 사용자 지적: 수량이 "56,802,787,001"처럼 엉뚱하게 나오는 오류가
+              // 반복됨 → "옮겨"): 행 글자에서 숫자·단위 모양으로 수량을 짐작하지 않는다. 표의
+              // 머리행(품명·규격·단위·수량)으로 칸을 정해 읽고(doc-rows.ts, narafile과 같은 방식),
+              // "품명 칸에 키워드 + 수량 칸 숫자 > 0"인 행만 소요량 근거로 쓴다. 머리행을 못 찾은
+              // 문서는 수량을 짐작하지 않고 리드에서 뺀다(로그로 남김).
+              const structuredEntries = await structuredNeedsForFile(
+                searchablePath,
+                attachment.name,
+                settings.matchKeywords,
+                matches,
+                noticeNumber,
+              );
+              if (structuredEntries.length === 0) {
+                funnel.needRejectedRow += matches.length;
+                logger.info(
+                  { noticeNumber, fileName: path.basename(searchablePath), matchCount: matches.length },
+                  "일별 스캔[소요량]: 표 머리행으로 확인된 키워드 수량 행 없음 — 수량을 짐작하지 않고 제외",
+                );
+              }
+              for (const { match, need, matchedKeyword, row } of structuredEntries) {
                 if (match.section === "관급자재") continue;
-                const need = qualifyBoqRow(match.originalText, settings.matchKeywords);
-                if (!need.ok) {
-                  funnel.needRejectedRow += 1;
-                  logger.debug(
-                    { noticeNumber, reason: need.reason, text: match.originalText.slice(0, 200) },
-                    "일별 스캔[소요량]: 내역서 행 판정 탈락",
-                  );
-                  continue;
-                }
+                logger.debug(
+                  { noticeNumber, sheet: row.sh, row: row.r, item: row.item, qty: row.qty, unit: row.unit },
+                  "일별 스캔[소요량]: 표 구조로 확인한 수량 행",
+                );
                 const quantityValue = need.areaSqm ?? need.quantity;
                 const unit = need.areaSqm !== null ? "㎡" : need.unitLabel;
                 const quantityText = need.quantityText;
@@ -1134,7 +1198,7 @@ export async function executeScanRun(run: DailyScanRun): Promise<DailyScanRun> {
                     awardDate: String(award.fnlSucsfDate ?? award.rlOpengDt ?? "").trim() || null,
                     matchedKeyword,
                     quantityText,
-                    surroundingText: match.surroundingText,
+                    surroundingText: `[${row.sh ? `${row.sh} ` : ""}${row.p ? `${row.p}쪽 ` : ""}${row.r}행] ${row.t}\n${match.surroundingText}`,
                     attachmentFileName: matchedFileName,
                     attachmentStoredPath: path.relative(SCAN_ROOT, storedPath),
                   },
